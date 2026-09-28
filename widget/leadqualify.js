@@ -152,7 +152,8 @@
       var root = document.createElement("div");
       root.id = "lq-root";
       root.innerHTML =
-        '<button id="lq-bubble" aria-label="Chat with us">💬</button>' +
+        '<button id="lq-bubble" aria-label="Chat with us">' +
+        '<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></button>' +
         '<div id="lq-panel" style="display:none">' +
           '<div id="lq-header"><div><strong id="lq-biz"></strong><div id="lq-status"></div></div>' +
           '<button id="lq-close" aria-label="Close">✕</button></div>' +
@@ -288,7 +289,7 @@
         };
         persistLead(config, lead);
         typing(function () {
-          var badge = result.tier === "hot" ? "🔥" : result.tier === "warm" ? "🟡" : "🔵";
+          var dotColor = result.tier === "hot" ? "#dc2626" : result.tier === "warm" ? "#d97706" : "#2563eb";
           var msg = (state.open ? config.doneMessage : config.doneAfterHours)
             .replace("{name}", (state.answers.name || "there").split(" ")[0]);
           botSay(msg);
@@ -296,7 +297,9 @@
           card.className = "lq-msg lq-bot";
           card.innerHTML = "";
           var t = document.createElement("div");
-          t.innerHTML = "<strong>" + badge + " " + result.tier.toUpperCase() + " lead</strong> (" + result.score + "/100)";
+          t.innerHTML = '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' +
+            dotColor + ';margin-right:7px"></span><strong>' + result.tier.toUpperCase() +
+            ' lead</strong> <span style="color:#667085">(' + result.score + '/100)</span>';
           card.appendChild(t);
           var ul = document.createElement("ul");
           ul.className = "lq-reasons";
@@ -345,30 +348,47 @@
 
     function injectCss(config) {
       if (document.getElementById("lq-style")) return;
+      var font = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+      var ring = "0 0 0 3px " + hexToRgba(config.primaryColor, 0.18);
       var css =
-        "#lq-root{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:system-ui,-apple-system,sans-serif}" +
-        "#lq-bubble{width:60px;height:60px;border-radius:50%;border:none;font-size:26px;cursor:pointer;color:#fff;box-shadow:0 4px 14px rgba(0,0,0,.25)}" +
-        "#lq-panel{position:absolute;bottom:72px;right:0;width:340px;max-width:calc(100vw - 40px);height:480px;max-height:70vh;background:#fff;border-radius:14px;box-shadow:0 8px 30px rgba(0,0,0,.25);display:flex;flex-direction:column;overflow:hidden}" +
-        "#lq-header{background:" + config.primaryColor + ";color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center}" +
-        "#lq-header strong{font-size:15px}#lq-status{font-size:11px;opacity:.9}" +
-        "#lq-close{background:none;border:none;color:#fff;font-size:16px;cursor:pointer}" +
-        "#lq-messages{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px;background:#f8fafc}" +
-        ".lq-msg{max-width:85%;padding:9px 12px;border-radius:14px;font-size:14px;line-height:1.4}" +
-        ".lq-bot{background:#fff;border:1px solid #e2e8f0;align-self:flex-start;border-bottom-left-radius:4px}" +
+        "#lq-root{position:fixed;bottom:20px;right:20px;z-index:99999;font-family:" + font + ";-webkit-font-smoothing:antialiased}" +
+        "#lq-bubble{width:60px;height:60px;border-radius:50%;border:none;cursor:pointer;color:#fff;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 14px rgba(16,24,40,.28)}" +
+        "#lq-bubble:hover{filter:brightness(.94)}" +
+        "#lq-bubble:focus-visible{outline:2px solid #fff;outline-offset:3px}" +
+        "#lq-panel{position:absolute;bottom:74px;right:0;width:360px;max-width:calc(100vw - 40px);height:500px;max-height:72vh;background:#fff;border:1px solid #e5e8ec;border-radius:12px;box-shadow:0 12px 32px rgba(16,24,40,.16);display:flex;flex-direction:column;overflow:hidden}" +
+        "#lq-header{background:" + config.primaryColor + ";color:#fff;padding:14px 16px;display:flex;justify-content:space-between;align-items:center}" +
+        "#lq-header strong{font-size:15px;font-weight:600}#lq-status{font-size:12px;opacity:.92;margin-top:2px}" +
+        "#lq-close{background:none;border:none;color:#fff;font-size:16px;cursor:pointer;min-width:36px;min-height:36px;border-radius:8px}" +
+        "#lq-close:hover{background:rgba(255,255,255,.16)}" +
+        "#lq-messages{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px;background:#f8f9fb}" +
+        ".lq-msg{max-width:85%;padding:10px 14px;border-radius:14px;font-size:14px;line-height:1.5;color:#101828}" +
+        ".lq-bot{background:#fff;border:1px solid #e5e8ec;align-self:flex-start;border-bottom-left-radius:4px;box-shadow:0 1px 2px rgba(16,24,40,.05)}" +
         ".lq-user{background:" + config.primaryColor + ";color:#fff;align-self:flex-end;border-bottom-right-radius:4px}" +
         ".lq-typing{opacity:.6}" +
-        ".lq-reasons{margin:6px 0 0;padding-left:18px;font-size:13px}" +
-        "#lq-quick{display:flex;flex-wrap:wrap;gap:6px;padding:8px 12px;background:#fff;border-top:1px solid #e2e8f0}" +
-        ".lq-chip{background:#eef2ff;border:1px solid #c7d2fe;color:#3730a3;border-radius:20px;padding:7px 12px;font-size:13px;cursor:pointer}" +
-        ".lq-chip:hover{background:#e0e7ff}" +
-        "#lq-inputrow{display:flex;border-top:1px solid #e2e8f0;background:#fff}" +
-        "#lq-input{flex:1;border:none;padding:12px;font-size:14px;outline:none}" +
-        "#lq-input:disabled{background:#f1f5f9}" +
-        "#lq-send{border:none;background:" + config.primaryColor + ";color:#fff;padding:0 16px;font-size:16px;cursor:pointer}";
+        ".lq-reasons{margin:8px 0 0;padding-left:18px;font-size:13px;color:#344054}" +
+        "#lq-quick{display:flex;flex-wrap:wrap;gap:8px;padding:10px 14px;background:#fff;border-top:1px solid #e5e8ec}" +
+        ".lq-chip{background:#fff;border:1px solid #d0d5dd;color:#101828;border-radius:999px;padding:9px 15px;min-height:38px;font-size:13px;font-weight:500;cursor:pointer;font-family:" + font + "}" +
+        ".lq-chip:hover{border-color:#98a2b3;background:#f9fafb}" +
+        ".lq-chip:focus-visible{outline:none;box-shadow:" + ring + ";border-color:" + config.primaryColor + "}" +
+        "#lq-inputrow{display:flex;border-top:1px solid #e5e8ec;background:#fff;align-items:stretch}" +
+        "#lq-input{flex:1;border:none;padding:12px 14px;font-size:14px;outline:none;min-height:48px;font-family:" + font + ";color:#101828}" +
+        "#lq-input:disabled{background:#f8f9fb;color:#98a2b3}" +
+        "#lq-send{border:none;background:" + config.primaryColor + ";color:#fff;padding:0 18px;min-height:48px;min-width:52px;font-size:16px;cursor:pointer}" +
+        "#lq-send:hover{filter:brightness(.94)}" +
+        "@media (max-width:640px){#lq-root{bottom:12px;right:12px}#lq-panel{width:calc(100vw - 32px);height:72vh;bottom:70px}}";
       var st = document.createElement("style");
       st.id = "lq-style";
       st.textContent = css;
       document.head.appendChild(st);
+    }
+
+    // #rrggbb -> rgba() so focus rings can reuse the configured primary color.
+    function hexToRgba(hex, alpha) {
+      var h = String(hex || "").replace("#", "");
+      if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+      var n = parseInt(h, 16);
+      if (isNaN(n) || h.length !== 6) return "rgba(124,58,237," + alpha + ")";
+      return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + alpha + ")";
     }
   }
 

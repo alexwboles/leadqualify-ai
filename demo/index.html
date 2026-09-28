@@ -5,38 +5,69 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Acme Plumbing — 24/7 Service</title>
 <style>
-  body{font-family:system-ui,-apple-system,sans-serif;margin:0;color:#1e293b}
-  header{background:#1d4ed8;color:#fff;padding:14px 24px;display:flex;justify-content:space-between;align-items:center}
-  header a{color:#fff;margin-left:18px;text-decoration:none;font-size:14px}
-  .hero{background:linear-gradient(120deg,#1d4ed8,#3b82f6);color:#fff;padding:64px 24px;text-align:center}
-  .hero h1{margin:0 0 12px;font-size:36px}
-  .hero p{font-size:18px;opacity:.92}
-  .cta{display:inline-block;background:#fff;color:#1d4ed8;font-weight:700;padding:12px 28px;border-radius:8px;margin-top:18px;cursor:pointer}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:18px;padding:40px 24px;max-width:1000px;margin:0 auto}
-  .card{border:1px solid #e2e8f0;border-radius:12px;padding:22px;background:#fff}
-  .card h3{margin:0 0 8px}
-  footer{background:#0f172a;color:#94a3b8;text-align:center;padding:22px;font-size:13px}
-  .note{max-width:1000px;margin:0 auto;padding:0 24px 40px;color:#64748b;font-size:14px}
+  :root{
+    --accent:#7c3aed; --accent-dark:#6d28d9; --accent-soft:rgba(124,58,237,.08);
+    --bg:#f8f9fb; --card:#fff; --line:#e5e8ec; --ink:#101828; --muted:#667085;
+    --font:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{font-family:var(--font);margin:0;background:var(--bg);color:var(--ink);
+    font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased}
+  header{background:#fff;border-bottom:1px solid var(--line);
+    padding:12px 24px;display:flex;justify-content:space-between;align-items:center;
+    position:sticky;top:0;z-index:10}
+  .brand{font-weight:700;font-size:17px;letter-spacing:-.01em}
+  header nav{display:flex;align-items:center;gap:20px}
+  header a{color:var(--muted);text-decoration:none;font-size:14px;font-weight:500}
+  header a:hover{color:var(--ink)}
+  header a.phone{color:var(--accent-dark);font-weight:600}
+  .hero{background:var(--accent);color:#fff;padding:72px 24px;text-align:center}
+  .hero h1{margin:0 0 12px;font-size:30px;font-weight:700;letter-spacing:-.01em}
+  .hero p{margin:0;font-size:17px;opacity:.94}
+  .cta{display:inline-block;background:#fff;color:var(--accent-dark);font-weight:600;
+    font-size:15px;padding:12px 30px;min-height:46px;line-height:22px;border-radius:10px;
+    margin-top:24px;cursor:pointer;border:none;font-family:var(--font)}
+  .cta:hover{background:#f4f3ff}
+  .cta:focus-visible{outline:2px solid #fff;outline-offset:3px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px;
+    padding:40px 24px;max-width:1120px;margin:0 auto}
+  .card{border:1px solid var(--line);border-radius:12px;padding:24px;background:var(--card);
+    box-shadow:0 1px 2px rgba(16,24,40,.06)}
+  .card h3{margin:0 0 8px;font-size:17px;font-weight:600}
+  .card p{margin:0;color:var(--muted);font-size:15px}
+  .note{max-width:1120px;margin:0 auto;padding:0 24px 48px;color:var(--muted);font-size:14px}
+  .note a{color:var(--accent-dark);font-weight:500}
+  footer{background:#fff;border-top:1px solid var(--line);color:var(--muted);
+    text-align:center;padding:20px;font-size:13px}
+  @media (max-width:640px){
+    header{padding:10px 16px;flex-wrap:wrap;gap:8px}
+    header nav{gap:14px}
+    .hero{padding:48px 20px}
+    .hero h1{font-size:26px}
+    .hero p{font-size:16px}
+    .grid{padding:28px 16px;grid-template-columns:1fr}
+    .note{padding:0 16px 36px}
+  }
 </style>
 </head>
 <body>
 <header>
-  <strong>🔧 Acme Plumbing</strong>
-  <nav><a href="/demo/">Home</a><a href="/inbox/">Lead inbox</a><a href="tel:+15551234567">(555) 123-4567</a></nav>
+  <span class="brand">Acme Plumbing</span>
+  <nav><a href="/demo/">Home</a><a href="/inbox/">Lead inbox</a><a class="phone" href="tel:+15551234567">(555) 123-4567</a></nav>
 </header>
 <div class="hero">
   <h1>Plumbing problems? Fixed today.</h1>
-  <p>Licensed, upfront pricing, 4.9★ from 800+ neighbors.</p>
-  <span class="cta" onclick="document.getElementById('lq-bubble').click()">💬 Chat with us now</span>
+  <p>Licensed, upfront pricing, 4.9 rating from 800+ neighbors.</p>
+  <button class="cta" onclick="document.getElementById('lq-bubble').click()">Chat with us now</button>
 </div>
 <div class="grid">
-  <div class="card"><h3>🚿 Repairs</h3><p>Leaks, clogs, drips — fixed right the first time.</p></div>
-  <div class="card"><h3>🔥 Water heaters</h3><p>Install &amp; repair, same-day service.</p></div>
-  <div class="card"><h3>🏠 Remodels</h3><p>Bath &amp; kitchen rough-in and finish.</p></div>
+  <div class="card"><h3>Repairs</h3><p>Leaks, clogs, drips — fixed right the first time.</p></div>
+  <div class="card"><h3>Water heaters</h3><p>Install &amp; repair, same-day service.</p></div>
+  <div class="card"><h3>Remodels</h3><p>Bath &amp; kitchen rough-in and finish.</p></div>
 </div>
 <div class="note">
   <strong>Demo:</strong> this page embeds the LeadQualify widget with a single script tag.
-  Click the 💬 bubble (bottom-right) and answer the questions — your lead lands in the
+  Click the chat bubble (bottom-right) and answer the questions — your lead lands in the
   <a href="/inbox/">lead inbox</a> with a hot/warm/cold score.
   It's after hours? The widget answers for you and queues the lead for the morning.
 </div>
@@ -48,7 +79,7 @@
 LeadQualify.init({
   businessName: "Acme Plumbing",
   apiBase: "",
-  primaryColor: "#1d4ed8",
+  primaryColor: "#7c3aed",
   services: ["Leak repair", "Drain cleaning", "Water heater", "Remodel", "Other"],
   businessHours: { open: 9, close: 17, days: [1,2,3,4,5] }
 });
