@@ -1,0 +1,1 @@
+{"description":"Embeddable AI lead-qualifier chat widget for local business websites","license":"MIT","main":"server.js","name":"leadqualify-ai","scripts":{"e2e":"bash test/e2e.sh","smoke":"bash test/smoke.sh","start":"node server.js"},"version":"1.0.0"}
