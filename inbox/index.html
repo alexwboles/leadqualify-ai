@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LeadQualify — Lead inbox</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;margin:0;background:#f1f5f9;color:#1e293b}
+  header{background:#0f172a;color:#fff;padding:16px 24px;display:flex;justify-content:space-between;align-items:center}
+  header a{color:#93c5fd;text-decoration:none;font-size:14px;margin-left:16px}
+  .wrap{max-width:1100px;margin:0 auto;padding:24px}
+  .toolbar{display:flex;gap:8px;align-items:center;margin-bottom:16px;flex-wrap:wrap}
+  .chip{border:1px solid #cbd5e1;background:#fff;border-radius:20px;padding:8px 16px;cursor:pointer;font-size:14px}
+  .chip.active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+  .btn{background:#16a34a;color:#fff;border:none;border-radius:8px;padding:9px 18px;cursor:pointer;font-size:14px;margin-left:auto}
+  .lead{background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:18px;margin-bottom:12px}
+  .lead-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}
+  .badge{font-size:12px;font-weight:700;border-radius:20px;padding:4px 12px;text-transform:uppercase}
+  .hot{background:#fee2e2;color:#b91c1c}.warm{background:#fef3c7;color:#b45309}.cold{background:#e0f2fe;color:#0369a1}
+  .meta{color:#64748b;font-size:13px;margin-top:6px}
+  .reasons{margin:10px 0 0;padding-left:18px;font-size:14px;color:#334155}
+  .empty{text-align:center;color:#64748b;padding:60px 20px}
+  .stats{display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap}
+  .stat{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 20px}
+  .stat b{font-size:22px;display:block}
+  .stat span{font-size:12px;color:#64748b}
+</style>
+</head>
+<body>
+<header>
+  <strong>📥 LeadQualify inbox</strong>
+  <nav><a href="/demo/">Demo site</a><a href="#" id="export">Export CSV</a></nav>
+</header>
+<div class="wrap">
+  <div class="stats" id="stats"></div>
+  <div class="toolbar" id="filters">
+    <button class="chip active" data-f="all">All</button>
+    <button class="chip" data-f="hot">🔥 Hot</button>
+    <button class="chip" data-f="warm">🟡 Warm</button>
+    <button class="chip" data-f="cold">🔵 Cold</button>
+  </div>
+  <div id="list"></div>
+</div>
+<script>
+var filter = "all", leads = [];
+
+function loadLeads(cb) {
+  fetch("/api/leads").then(function (r) { return r.json(); }).then(function (data) {
+    leads = data; cb();
+  }).catch(function () {
+    try { leads = JSON.parse(localStorage.getItem("lq_leads") || "[]"); } catch (e) { leads = []; }
+    cb();
+  });
+}
+
+function badge(t) { return '<span class="badge ' + t + '">' + t + '</span>'; }
+
+function render() {
+  var stats = { hot: 0, warm: 0, cold: 0 };
+  leads.forEach(function (l) { if (stats[l.tier] !== undefined) stats[l.tier]++; });
+  document.getElementById("stats").innerHTML =
+    stat(leads.length, "total leads") + stat(stats.hot, "🔥 hot") +
+    stat(stats.warm, "🟡 warm") + stat(stats.cold, "🔵 cold");
+  var list = document.getElementById("list");
+  var shown = leads.filter(function (l) { return filter === "all" || l.tier === filter; });
+  if (!shown.length) {
+    list.innerHTML = '<div class="empty">No leads yet. <a href="/demo/">Open the demo site</a> and chat with the widget — after-hours leads land here automatically.</div>';
+    return;
+  }
+  list.innerHTML = shown.slice().reverse().map(function (l) {
+    var a = l.answers || {};
+    return '<div class="lead"><div class="lead-head"><div><strong>' + esc(a.name || "Unknown") +
+      '</strong> ' + badge(l.tier || "cold") + ' <span style="color:#64748b">(' + (l.score || 0) + '/100)</span></div>' +
+      '<div class="meta">' + esc(l.createdAt || "") + (l.afterHours ? " · 🌙 after hours" : "") + '</div></div>' +
+      '<div class="meta">🧰 ' + esc(a.service || "—") + ' · ⏰ ' + esc(a.timeline || "—") +
+      ' · 💰 ' + esc(a.budget || "—") + ' · 📍 ' + esc(a.location || "—") + ' · 📞 ' + esc(a.contact || "—") + '</div>' +
+      '<ul class="reasons">' + (l.reasons || []).map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + '</ul></div>';
+  }).join("");
+}
+function stat(n, label) { return '<div class="stat"><b>' + n + '</b><span>' + label + '</span></div>'; }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) { return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]; }); }
+
+document.getElementById("filters").addEventListener("click", function (e) {
+  if (e.target.dataset.f) {
+    filter = e.target.dataset.f;
+    var chips = this.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++) chips[i].classList.remove("active");
+    e.target.classList.add("active");
+    render();
+  }
+});
+document.getElementById("export").onclick = function (e) {
+  e.preventDefault();
+  window.location = "/api/export.csv";
+  return false;
+};
+
+loadLeads(render);
+setInterval(function () { loadLeads(render); }, 15000); // live refresh
+</script>
+</body>
+</html>
