@@ -55,8 +55,43 @@ function csvEscape(v) {
 
 var scoring = require("./lib/scoring.js");
 
+function parseQuery(req) {
+  var query = {};
+  var idx = req.url.indexOf("?");
+  if (idx === -1) return query;
+  req.url.slice(idx + 1).split("&").forEach(function (pair) {
+    var kv = pair.split("=");
+    if (kv[0]) {
+      try { query[decodeURIComponent(kv[0])] = decodeURIComponent(kv[1] || ""); }
+      catch (e) { query[kv[0]] = kv[1] || ""; }
+    }
+  });
+  return query;
+}
+
+// Filter leads for the inbox search box, date-range chips, and filtered CSV export.
+// opts: { tier, q, days } — tier exact match; q matches name/service/location/contact;
+// days keeps leads created within the last N days.
+function filterLeads(leads, opts) {
+  opts = opts || {};
+  var q = String(opts.q || "").toLowerCase();
+  var days = parseFloat(opts.days);
+  var cutoff = isNaN(days) || days < 0 ? null : Date.now() - days * 86400000;
+  return leads.filter(function (l) {
+    if (opts.tier && opts.tier !== "all" && l.tier !== opts.tier) return false;
+    if (cutoff && (!l.createdAt || new Date(l.createdAt).getTime() < cutoff)) return false;
+    if (q) {
+      var a = l.answers || {};
+      var blob = [l.id, a.name, a.service, a.location, a.contact].join(" ").toLowerCase();
+      if (blob.indexOf(q) === -1) return false;
+    }
+    return true;
+  });
+}
+
 var server = http.createServer(function (req, res) {
   var url = req.url.split("?")[0];
+  var query = parseQuery(req);
 
   if (url === "/" || url === "") { send(res, 302, "", "text/plain"); res.setHeader("Location", "/demo/"); res.end(); return; }
 
@@ -85,12 +120,12 @@ var server = http.createServer(function (req, res) {
   }
 
   if (url === "/api/export.csv" && req.method === "GET") {
-    var leads = readLeads();
-    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "reasons"]];
+    var leads = filterLeads(readLeads(), query);
+    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "reasons"]];
     leads.forEach(function (l) {
       var a = l.answers || {};
       rows.push([l.id, l.createdAt, a.name, a.service, a.timeline, a.budget, a.location, a.contact,
-        l.tier, l.score, (l.reasons || []).join(" | ")]);
+        l.tier, l.score, l.status || "new", (l.reasons || []).join(" | ")]);
     });
     var csv = rows.map(function (r) { return r.map(csvEscape).join(","); }).join("\n");
     res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=leads.csv" });
@@ -104,6 +139,36 @@ var server = http.createServer(function (req, res) {
       var r = scoring.scoreLead(payload.answers || {}, payload.config || {});
       send(res, 200, JSON.stringify(r), "application/json");
     });
+  }
+
+  // Mark a lead new/contacted (follow-up status lives server-side).
+  var leadMatch = url.match(/^\/api\/lead\/([^/]+)\/status$/);
+  if (leadMatch && req.method === "POST") {
+    return readBody(req, function (body) {
+      var payload;
+      try { payload = JSON.parse(body); } catch (e) { return send(res, 400, "Invalid JSON"); }
+      var status = String(payload.status || "");
+      if (status !== "new" && status !== "contacted") return send(res, 400, "status must be 'new' or 'contacted'");
+      var leads = readLeads();
+      var id = decodeURIComponent(leadMatch[1]);
+      var lead = leads.filter(function (l) { return l.id === id; })[0];
+      if (!lead) return send(res, 404, "Lead not found");
+      lead.status = status;
+      writeLeads(leads);
+      send(res, 200, JSON.stringify({ ok: true, id: lead.id, status: lead.status }), "application/json");
+    });
+  }
+
+  // Delete a lead (e.g. test chats, spam that slipped through).
+  var delMatch = url.match(/^\/api\/lead\/([^/]+)$/);
+  if (delMatch && req.method === "DELETE") {
+    var leads = readLeads();
+    var id = decodeURIComponent(delMatch[1]);
+    var before = leads.length;
+    leads = leads.filter(function (l) { return l.id !== id; });
+    if (leads.length === before) return send(res, 404, "Lead not found");
+    writeLeads(leads);
+    return send(res, 200, JSON.stringify({ ok: true, id: id }), "application/json");
   }
 
   // --- Static ---

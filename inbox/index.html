@@ -77,6 +77,32 @@
   .chip.active{background:var(--ink);color:#fff;box-shadow:0 2px 6px rgba(25,21,16,.25)}
   .chip:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
 
+  /* ---- search + date filter ---- */
+  .finder{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  .search{background:var(--card);border:1px solid var(--line);border-radius:0;
+    padding:11px 16px;min-height:44px;font-size:14.5px;font-family:var(--font);
+    color:var(--body);width:320px;max-width:100%}
+  .search:focus{outline:2px solid var(--ember);outline-offset:1px;border-color:var(--ember)}
+  .date-chip{border:1px solid var(--line);background:var(--card);color:var(--muted);
+    font-family:var(--font);border-radius:0;padding:9px 16px;min-height:40px;
+    cursor:pointer;font-size:13.5px;font-weight:600}
+  .date-chip.active{background:var(--ink);color:#fff;border-color:var(--ink)}
+  .date-chip:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+
+  /* ---- lead actions ---- */
+  .lead-actions{display:flex;gap:8px;margin-top:14px;padding-top:12px;border-top:1px dashed var(--line)}
+  .act{border:1px solid var(--line);background:#fff;color:var(--body);font-family:var(--font);
+    border-radius:0;padding:8px 14px;min-height:38px;font-size:13px;font-weight:650;cursor:pointer}
+  .act:hover{border-color:var(--ember);color:var(--ember-dark)}
+  .act:focus-visible{outline:2px solid var(--ember);outline-offset:2px}
+  .act.done{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}
+  .act.del:hover{border-color:var(--hot);color:var(--hot)}
+  .contacted-badge{display:inline-block;background:#ecfdf5;color:#065f46;font-size:11px;font-weight:700;
+    border-radius:0;padding:3px 10px;letter-spacing:.05em;text-transform:uppercase;margin-left:8px}
+  .lead.contacted .lead-body{opacity:.62}
+  .lead.contacted:hover .lead-body{opacity:1}
+  .count-line{color:var(--muted);font-size:13px;margin:0 0 14px}
+
   /* ---- lead cards ---- */
   .lead{background:var(--card);border:1px solid var(--line);border-radius:0;
     margin-bottom:14px;box-shadow:0 2px 8px rgba(60,45,25,.06);overflow:hidden;
@@ -173,11 +199,34 @@
       <button class="chip" data-f="warm">Warm</button>
       <button class="chip" data-f="cold">Cold</button>
     </div>
+    <div class="finder">
+      <input class="search" id="search" type="search" placeholder="Search name, contact, service…" aria-label="Search leads">
+      <div role="group" aria-label="Filter by date">
+        <button class="date-chip active" data-d="all" type="button">All time</button>
+        <button class="date-chip" data-d="1" type="button">Today</button>
+        <button class="date-chip" data-d="7" type="button">Last 7 days</button>
+      </div>
+    </div>
+    <p class="count-line" id="count-line"></p>
     <div id="list"></div>
   </main>
 </div>
 <script>
-var filter = "all", leads = [];
+var filter = "all", dateRange = "all", searchQ = "", leads = [];
+
+function matchesFinder(l) {
+  if (dateRange !== "all") {
+    if (!l.createdAt) return false;
+    var cutoff = Date.now() - parseInt(dateRange, 10) * 86400000;
+    if (new Date(l.createdAt).getTime() < cutoff) return false;
+  }
+  if (searchQ) {
+    var a = l.answers || {};
+    var blob = [l.id, a.name, a.service, a.location, a.contact].join(" ").toLowerCase();
+    if (blob.indexOf(searchQ) === -1) return false;
+  }
+  return true;
+}
 
 function loadLeads(cb) {
   fetch("/api/leads").then(function (r) { return r.json(); }).then(function (data) {
@@ -197,14 +246,25 @@ function stat(n, label, tier) {
 
 function render() {
   var stats = { hot: 0, warm: 0, cold: 0 };
-  leads.forEach(function (l) { if (stats[l.tier] !== undefined) stats[l.tier]++; });
+  var awaiting = 0;
+  leads.forEach(function (l) {
+    if (stats[l.tier] !== undefined) stats[l.tier]++;
+    if ((l.status || "new") === "new") awaiting++;
+  });
   document.getElementById("stats").innerHTML =
     stat(leads.length, "total leads", "") + stat(stats.hot, "hot", "hot") +
-    stat(stats.warm, "warm", "warm") + stat(stats.cold, "cold", "cold");
+    stat(stats.warm, "warm", "warm") + stat(stats.cold, "cold", "cold") +
+    stat(awaiting, "awaiting callback", "");
   var list = document.getElementById("list");
-  var shown = leads.filter(function (l) { return filter === "all" || l.tier === filter; });
+  var shown = leads.filter(function (l) {
+    return (filter === "all" || l.tier === filter) && matchesFinder(l);
+  });
+  document.getElementById("count-line").textContent =
+    shown.length === leads.length ? "" :
+    "Showing " + shown.length + " of " + leads.length + " leads.";
   if (!shown.length) {
-    list.innerHTML = '<div class="empty"><span class="big" aria-hidden="true"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#c2410c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>No leads yet. <a href="/demo/">Open the demo site</a> and chat with the widget — after-hours leads land here automatically.</div>';
+    list.innerHTML = '<div class="empty"><span class="big" aria-hidden="true"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#c2410c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>No leads match. ' +
+      (leads.length ? 'Try clearing the search or filters.' : '<a href="/demo/">Open the demo site</a> and chat with the widget — after-hours leads land here automatically.') + '</div>';
     return;
   }
   list.innerHTML = shown.slice().reverse().map(function (l) {
@@ -213,12 +273,14 @@ function render() {
     var name = esc(a.name || "Unknown");
     var initial = (a.name || "U").trim().charAt(0).toUpperCase() || "U";
     var score = l.score || 0;
+    var contacted = (l.status || "new") === "contacted";
     var when = "";
     try { when = new Date(l.createdAt).toLocaleString(); } catch (e) { when = esc(l.createdAt || ""); }
-    return '<div class="lead"><div class="heat ' + tier + '"></div><div class="lead-body">' +
+    return '<div class="lead' + (contacted ? ' contacted' : '') + '"><div class="heat ' + tier + '"></div><div class="lead-body">' +
       '<div class="lead-head"><div class="who">' +
       '<span class="avatar ' + tier + '">' + esc(initial) + '</span>' +
       '<div><span class="lead-name">' + name + '</span>' + badge(tier) +
+      (contacted ? '<span class="contacted-badge">contacted</span>' : '') +
       '<div class="score">' + score + '/100 qualification score</div></div></div>' +
       '<div class="heat-bar" title="Score ' + score + '/100"><div class="heat-fill ' + tier + '" style="width:' + score + '%"></div></div></div>' +
       '<div class="meta">' +
@@ -227,6 +289,11 @@ function render() {
       '<div class="when">' + esc(when) + (l.afterHours ? ' <span class="after-hours">after hours</span>' : '') + '</div>' +
       ((l.reasons && l.reasons.length) ?
         '<ul class="reasons">' + l.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + '</ul>' : '') +
+      '<div class="lead-actions">' +
+      '<button class="act' + (contacted ? ' done' : '') + '" data-act="status" data-id="' + esc(l.id) + '">' +
+      (contacted ? '✓ Contacted — mark as new' : 'Mark as contacted') + '</button>' +
+      '<button class="act del" data-act="delete" data-id="' + esc(l.id) + '">Delete lead</button>' +
+      '</div>' +
       '</div></div>';
   }).join("");
 }
@@ -244,9 +311,54 @@ document.getElementById("filters").addEventListener("click", function (e) {
     render();
   }
 });
+document.querySelectorAll(".date-chip").forEach(function (b) {
+  b.addEventListener("click", function () {
+    dateRange = b.dataset.d;
+    document.querySelectorAll(".date-chip").forEach(function (x) {
+      x.classList.toggle("active", x === b);
+    });
+    render();
+  });
+});
+document.getElementById("search").addEventListener("input", function (e) {
+  searchQ = e.target.value.trim().toLowerCase();
+  render();
+});
+document.getElementById("list").addEventListener("click", function (e) {
+  var btn = e.target.closest("[data-act]");
+  if (!btn) return;
+  var id = btn.getAttribute("data-id");
+  var lead = null;
+  for (var i = 0; i < leads.length; i++) if (leads[i].id === id) lead = leads[i];
+  if (!lead) return;
+  var act = btn.getAttribute("data-act");
+  if (act === "status") {
+    var next = (lead.status || "new") === "contacted" ? "new" : "contacted";
+    fetch("/api/lead/" + encodeURIComponent(id) + "/status", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: next })
+    }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function () { lead.status = next; render(); })
+      .catch(function () { alert("Couldn't update that lead — is the server running?"); });
+  } else if (act === "delete") {
+    if (!confirm("Delete this lead? This can't be undone.")) return;
+    fetch("/api/lead/" + encodeURIComponent(id), { method: "DELETE" })
+      .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+      .then(function () {
+        leads = leads.filter(function (l) { return l.id !== id; });
+        render();
+      })
+      .catch(function () { alert("Couldn't delete that lead — is the server running?"); });
+  }
+});
+// Export follows the current view: tier filter + search + date range.
 document.getElementById("export").onclick = function (e) {
   e.preventDefault();
-  window.location = "/api/export.csv";
+  var qs = "?tier=" + encodeURIComponent(filter) +
+    "&q=" + encodeURIComponent(searchQ) +
+    (dateRange === "all" ? "" : "&days=" + encodeURIComponent(dateRange));
+  window.location = "/api/export.csv" + qs;
   return false;
 };
 

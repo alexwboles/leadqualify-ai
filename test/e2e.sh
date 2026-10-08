@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LeadQualify e2e tests — 7 flows exercising scoring, hours, and the API end to end.
+# LeadQualify e2e tests — 11 flows exercising scoring, hours, and the API end to end.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -86,5 +86,49 @@ CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$PORT/ap
 curl -sf "http://localhost:$PORT/api/leads" >/dev/null || fail "flow 8: server died after bad JSON"
 ok "flow 8: malformed JSON rejected with 400, server healthy"
 
+# Flow 9: contacted status round-trip — mark contacted, verify persisted, un-mark
+ID="e2e_contact_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$ID\",\"answers\":{\"name\":\"Callback Casey\",\"service\":\"Repair\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"555-0142\"}}" >/dev/null \
+  || fail "flow 9: POST /api/lead"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/status" -H 'Content-Type: application/json' \
+  -d '{"status":"contacted"}' | grep -q '"status":"contacted"' || fail "flow 9: mark contacted"
+ST=$(curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='$ID';});
+  console.log(l ? (l.status || 'new') : 'missing');
+});")
+[ "$ST" = "contacted" ] || fail "flow 9: status not persisted (got $ST)"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/status" -H 'Content-Type: application/json' \
+  -d '{"status":"new"}' | grep -q '"status":"new"' || fail "flow 9: un-mark contacted"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$ID" >/dev/null || fail "flow 9: cleanup"
+ok "flow 9: contacted status toggles and persists server-side"
+
+# Flow 10: delete flow — lead vanishes from list and CSV
+ID="e2e_del_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$ID\",\"answers\":{\"name\":\"Gone Girl\",\"service\":\"Repair\",\"timeline\":\"browsing\",\"budget\":\"notsure\",\"location\":\"00000\",\"contact\":\"x\"}}" >/dev/null \
+  || fail "flow 10: POST /api/lead"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$ID" >/dev/null || fail "flow 10: DELETE"
+curl -sf "http://localhost:$PORT/api/leads" | grep -q "$ID" && fail "flow 10: lead still in /api/leads"
+curl -sf "http://localhost:$PORT/api/export.csv" | grep -q "$ID" && fail "flow 10: lead still in CSV"
+ok "flow 10: deleted lead disappears from list and CSV export"
+
+# Flow 11: filtered export — tier + q + days params slice the CSV
+HOT="e2e_fhot_$(date +%s)"; COLD="e2e_fcold_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$HOT\",\"answers\":{\"name\":\"Harold Hot\",\"service\":\"Emergency\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"harold@example.com\"}}" >/dev/null || fail "flow 11: seed hot"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$COLD\",\"answers\":{\"name\":\"Cora Cold\",\"service\":\"Repair\",\"timeline\":\"browsing\",\"budget\":\"notsure\",\"location\":\"00000\",\"contact\":\"x\"}}" >/dev/null || fail "flow 11: seed cold"
+CSV=$(curl -sf "http://localhost:$PORT/api/export.csv?tier=hot&days=1")
+echo "$CSV" | grep -q "$HOT" || fail "flow 11: tier=hot missing hot lead"
+echo "$CSV" | grep -q "$COLD" && fail "flow 11: tier=hot should exclude cold lead"
+CSV2=$(curl -sf "http://localhost:$PORT/api/export.csv?q=cora%20cold")
+echo "$CSV2" | grep -q "$COLD" || fail "flow 11: q= search missed"
+echo "$CSV2" | grep -q "$HOT" && fail "flow 11: q= search should exclude non-match"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$HOT" >/dev/null
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$COLD" >/dev/null
+ok "flow 11: /api/export.csv?tier=&q=&days= exports exactly the filtered rows"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "E2E: $PASS/8 passed"
+echo "E2E: $PASS/11 passed"
