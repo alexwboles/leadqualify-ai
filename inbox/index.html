@@ -102,6 +102,13 @@
   .lead.contacted .lead-body{opacity:.62}
   .lead.contacted:hover .lead-body{opacity:1}
   .count-line{color:var(--muted);font-size:13px;margin:0 0 14px}
+  .dup-badge{display:inline-block;background:#fef3c7;color:#92400e;font-size:11px;font-weight:700;
+    border-radius:0;padding:3px 10px;letter-spacing:.05em;text-transform:uppercase;margin-left:8px}
+  .followups{background:#fffbeb;border:1px solid #fde68a;padding:14px 18px;margin:0 0 18px}
+  .followups h3{margin:0 0 2px;color:#92400e}
+  .followups .sub{margin:0 0 8px;color:var(--muted);font-size:13px}
+  .fu-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid #fde68a;font-size:14px}
+  .fu-row .muted{color:var(--muted);font-size:12.5px;margin-left:auto}
 
   /* ---- lead cards ---- */
   .lead{background:var(--card);border:1px solid var(--line);border-radius:0;
@@ -208,6 +215,7 @@
       </div>
     </div>
     <p class="count-line" id="count-line"></p>
+    <div id="followups"></div>
     <div id="list"></div>
   </main>
 </div>
@@ -244,6 +252,8 @@ function stat(n, label, tier) {
   return '<div class="stat' + (tier ? ' ' + tier : '') + '"><b>' + n + '</b><span>' + label + '</span></div>';
 }
 
+var funnel = null, followups = [];
+
 function render() {
   var stats = { hot: 0, warm: 0, cold: 0 };
   var awaiting = 0;
@@ -251,10 +261,17 @@ function render() {
     if (stats[l.tier] !== undefined) stats[l.tier]++;
     if ((l.status || "new") === "new") awaiting++;
   });
+  var extra = "";
+  if (funnel) {
+    extra = stat(funnel.contactRate + "%", "contacted", "") +
+      stat(funnel.spamRate + "%", "spam", "") +
+      stat(funnel.hotToday, "hot today", "hot");
+  }
   document.getElementById("stats").innerHTML =
     stat(leads.length, "total leads", "") + stat(stats.hot, "hot", "hot") +
     stat(stats.warm, "warm", "warm") + stat(stats.cold, "cold", "cold") +
-    stat(awaiting, "awaiting callback", "");
+    stat(awaiting, "awaiting callback", "") + extra;
+  renderFollowups();
   var list = document.getElementById("list");
   var shown = leads.filter(function (l) {
     return (filter === "all" || l.tier === filter) && matchesFinder(l);
@@ -281,6 +298,7 @@ function render() {
       '<span class="avatar ' + tier + '">' + esc(initial) + '</span>' +
       '<div><span class="lead-name">' + name + '</span>' + badge(tier) +
       (contacted ? '<span class="contacted-badge">contacted</span>' : '') +
+      (l.duplicateOf && l.duplicateOf.length ? '<span class="dup-badge" title="Same contact already on file">possible duplicate</span>' : '') +
       '<div class="score">' + score + '/100 qualification score</div></div></div>' +
       '<div class="heat-bar" title="Score ' + score + '/100"><div class="heat-fill ' + tier + '" style="width:' + score + '%"></div></div></div>' +
       '<div class="meta">' +
@@ -300,6 +318,28 @@ function render() {
 
 function meta(label, value) {
   return '<span><strong>' + label + ':</strong> ' + esc(value || "—") + '</span>';
+}
+
+// Follow-up queue: hot/warm leads sitting uncontacted for 24h+.
+function renderFollowups() {
+  var box = document.getElementById("followups");
+  if (!followups.length) { box.innerHTML = ""; return; }
+  box.innerHTML = '<div class="followups"><h3>Needs a callback (' + followups.length + ')</h3>' +
+    '<p class="sub">Hot or warm leads uncontacted for 24+ hours — oldest first by score.</p>' +
+    followups.slice(0, 8).map(function (l) {
+      var a = l.answers || {};
+      var ageH = l.createdAt ? Math.max(1, Math.round((Date.now() - new Date(l.createdAt).getTime()) / 3600000)) : "?";
+      return '<div class="fu-row"><span>' + esc(a.name || "Unknown") + '</span>' +
+        badge(l.tier || "cold") +
+        '<span class="score">' + (l.score || 0) + '/100</span>' +
+        '<span class="muted">' + ageH + 'h waiting · ' + esc(a.contact || "") + '</span></div>';
+    }).join("") +
+    (followups.length > 8 ? '<p class="muted">+ ' + (followups.length - 8) + ' more below</p>' : "") + '</div>';
+}
+
+function loadMeta() {
+  fetch("/api/stats").then(function (r) { return r.json(); }).then(function (s) { funnel = s; render(); }).catch(function () {});
+  fetch("/api/followups").then(function (r) { return r.json(); }).then(function (f) { followups = f; render(); }).catch(function () {});
 }
 
 document.getElementById("filters").addEventListener("click", function (e) {
@@ -363,7 +403,8 @@ document.getElementById("export").onclick = function (e) {
 };
 
 loadLeads(render);
-setInterval(function () { loadLeads(render); }, 15000); // live refresh
+loadMeta();
+setInterval(function () { loadLeads(render); loadMeta(); }, 15000); // live refresh
 </script>
 </body>
 </html>

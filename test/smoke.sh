@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LeadQualify smoke tests — 14 checks. Fails fast on first failure.
+# LeadQualify smoke tests — 19 checks. Fails fast on first failure.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -25,6 +25,47 @@ ok "lib/scoring.js syntax valid"
 node -e "var s=require('./lib/scoring.js'); if(typeof s.scoreLead!=='function'||typeof s.isOpenNow!=='function') throw new Error('bad exports');" \
   || fail "scoring lib exports"
 ok "scoring lib loads in Node with scoreLead + isOpenNow"
+
+# 5b. lead-management pure functions: duplicates, follow-ups, funnel stats
+node -e "
+var s = require('./lib/scoring.js');
+['contactKey','findDuplicates','needsFollowUp','funnelStats'].forEach(function (f) {
+  if (typeof s[f] !== 'function') throw new Error('missing ' + f);
+});
+// contactKey: emails normalized, phones digit-stripped
+if (s.contactKey({ contact: 'Jane@Example.com' }) !== 'email:jane@example.com') throw new Error('email key');
+if (s.contactKey({ contact: '(555) 123-4567' }) !== 'phone:5551234567') throw new Error('phone key');
+if (s.contactKey({ contact: 'x' }) !== '') throw new Error('junk key should be empty');
+// duplicates: same email twice within 30 days
+var now = new Date('2026-10-12T12:00:00').getTime();
+var leads = [
+  { id: 'l1', createdAt: '2026-10-01T10:00:00.000Z', answers: { contact: 'jane@example.com' }, tier: 'warm', score: 55 },
+  { id: 'l2', createdAt: '2026-09-01T10:00:00.000Z', answers: { contact: 'jane@example.com' }, tier: 'cold', score: 20 },
+  { id: 'l3', createdAt: '2026-10-10T10:00:00.000Z', answers: { contact: 'bob@example.com' }, tier: 'hot', score: 80 }
+];
+var dups = s.findDuplicates(leads, { contact: 'Jane@Example.com' }, 30, now);
+if (dups.length !== 1 || dups[0].lead.id !== 'l1') throw new Error('duplicates: ' + JSON.stringify(dups.map(function(d){return d.lead.id;})));
+if (s.findDuplicates(leads, { contact: 'nobody@example.com' }, 30, now).length !== 0) throw new Error('false positive');
+// follow-ups: hot/warm + new + older than 24h
+var fu = s.needsFollowUp([
+  { id: 'a', tier: 'hot', score: 90, status: 'new', createdAt: '2026-10-10T10:00:00.000Z' },
+  { id: 'b', tier: 'warm', score: 50, status: 'new', createdAt: '2026-10-12T11:00:00.000Z' },
+  { id: 'c', tier: 'hot', score: 80, status: 'contacted', createdAt: '2026-10-09T10:00:00.000Z' },
+  { id: 'd', tier: 'cold', score: 10, status: 'new', createdAt: '2026-10-09T10:00:00.000Z' }
+], 24, now);
+if (fu.length !== 1 || fu[0].id !== 'a') throw new Error('followups: ' + JSON.stringify(fu.map(function(x){return x.id;})));
+// funnel stats
+var fs = s.funnelStats([
+  { tier: 'hot', score: 90, status: 'contacted', spam: false, createdAt: '2026-10-12T10:00:00.000Z' },
+  { tier: 'warm', score: 50, status: 'new', spam: false, createdAt: '2026-10-11T10:00:00.000Z' },
+  { tier: 'cold', score: 5, status: 'new', spam: true, createdAt: '2026-10-11T10:00:00.000Z' },
+  { tier: 'hot', score: 80, status: 'new', spam: false, createdAt: '2026-01-01T10:00:00.000Z' }
+], 30, now);
+if (fs.total !== 3 || fs.byTier.hot !== 1 || fs.hotToday !== 1) throw new Error('funnel: ' + JSON.stringify(fs));
+if (fs.spamRate !== 33 || fs.contactRate !== 33) throw new Error('rates: ' + JSON.stringify(fs));
+console.log('lead-mgmt pure functions ok');
+" || fail "lead-management pure functions"
+ok "contactKey/findDuplicates/needsFollowUp/funnelStats pure logic"
 
 # 6. config sample is valid JSON with required keys
 node -e "var c=require('./config/acme-plumbing.json'); if(!c.businessName||!c.businessHours||!c.services) throw new Error('bad config');" \
@@ -115,5 +156,39 @@ curl -sf -X DELETE "http://localhost:$PORT/api/lead/$HOT" >/dev/null
 curl -sf -X DELETE "http://localhost:$PORT/api/lead/$COLD" >/dev/null
 ok "GET /api/export.csv?tier=&q=&days= filters rows + adds status column"
 
+# 15. duplicate detection: same contact twice -> second flags duplicateOf
+DUP="smoke_dup_$(date +%s)"
+R1=$(curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"${DUP}_1\",\"answers\":{\"name\":\"Dup Test\",\"service\":\"Repair\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"duptest@example.com\"}}")
+echo "$R1" | grep -q '"duplicates":0' || fail "first lead should have 0 duplicates: $R1"
+R2=$(curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"${DUP}_2\",\"answers\":{\"name\":\"Dup Test Again\",\"service\":\"Repair\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"DUPTEST@example.com\"}}")
+echo "$R2" | grep -q '"duplicates":1' || fail "second lead should flag 1 duplicate: $R2"
+curl -sf "http://localhost:$PORT/api/leads" | grep -q "${DUP}_2" || fail "dup lead not listed"
+curl -sf "http://localhost:$PORT/api/export.csv" | grep -q "duplicates" || fail "CSV missing duplicates column"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/${DUP}_1" >/dev/null
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/${DUP}_2" >/dev/null
+ok "duplicate detection: same contact twice -> duplicateOf flagged + CSV column"
+
+# 16. /api/stats + /api/followups endpoints
+curl -sf "http://localhost:$PORT/api/stats" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(typeof s.total!=='number'||!s.byTier||typeof s.contactRate!=='number') throw new Error('bad stats: '+d);
+});" || fail "GET /api/stats bad shape"
+ok "GET /api/stats returns funnel snapshot"
+curl -sf "http://localhost:$PORT/api/followups?hours=1" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var f=JSON.parse(d);
+  if(!Array.isArray(f)) throw new Error('not an array');
+});" || fail "GET /api/followups bad shape"
+ok "GET /api/followups returns follow-up queue array"
+
+# 17. inbox shows duplicate badge + follow-up section wiring
+grep -q 'duplicateOf' inbox/index.html || fail "inbox missing duplicate badge"
+grep -q 'api/followups' inbox/index.html || fail "inbox missing followups fetch"
+grep -q 'api/stats' inbox/index.html || fail "inbox missing stats fetch"
+ok "inbox wires duplicate badge, follow-up queue, funnel stats"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "SMOKE: $PASS/14 passed"
+echo "SMOKE: $PASS/19 passed"

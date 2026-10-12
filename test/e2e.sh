@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# LeadQualify e2e tests — 11 flows exercising scoring, hours, and the API end to end.
+# LeadQualify e2e tests — 13 flows exercising scoring, hours, and the API end to end.
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -130,5 +130,42 @@ curl -sf -X DELETE "http://localhost:$PORT/api/lead/$HOT" >/dev/null
 curl -sf -X DELETE "http://localhost:$PORT/api/lead/$COLD" >/dev/null
 ok "flow 11: /api/export.csv?tier=&q=&days= exports exactly the filtered rows"
 
+# Flow 12: duplicate journey — same caller twice, second is flagged
+DUP="e2e_dup_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"${DUP}_1\",\"answers\":{\"name\":\"Rita Repeat\",\"service\":\"Installation\",\"timeline\":\"this-week\",\"budget\":\"500to2000\",\"location\":\"33101\",\"contact\":\"(305) 555-0142\"}}" >/dev/null \
+  || fail "flow 12: first POST"
+R=$(curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"${DUP}_2\",\"answers\":{\"name\":\"Rita R.\",\"service\":\"Installation\",\"timeline\":\"this-week\",\"budget\":\"500to2000\",\"location\":\"33101\",\"contact\":\"3055550142\"}}")
+echo "$R" | grep -q '"duplicates":1' || fail "flow 12: phone-format duplicate not flagged: $R"
+STORED=$(curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='${DUP}_2';});
+  if(!l||!l.duplicateOf||l.duplicateOf[0]!=='${DUP}_1') throw new Error('duplicateOf not stored');
+  console.log('stored');
+});") || fail "flow 12: duplicateOf not persisted"
+[ "$STORED" = "stored" ] || fail "flow 12: stored check"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/${DUP}_1" >/dev/null
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/${DUP}_2" >/dev/null
+ok "flow 12: repeat caller flagged as duplicate (phone formats normalized)"
+
+# Flow 13: follow-up + stats journey — stale hot lead surfaces, funnel counts it
+FUP="e2e_fup_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$FUP\",\"createdAt\":\"2026-10-10T09:00:00.000Z\",\"answers\":{\"name\":\"Wanda Waiting\",\"service\":\"Emergency\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"wanda@example.com\"}}" >/dev/null \
+  || fail "flow 13: seed stale hot lead"
+curl -sf "http://localhost:$PORT/api/followups?hours=24" | grep -q "$FUP" || fail "flow 13: stale hot lead missing from followups"
+curl -sf "http://localhost:$PORT/api/stats?days=30" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(s.byTier.hot<1||s.hotToday<0) throw new Error('stats wrong: '+d);
+});" || fail "flow 13: stats bad"
+# mark contacted -> drops out of the follow-up queue
+curl -sf -X POST "http://localhost:$PORT/api/lead/$FUP/status" -H 'Content-Type: application/json' \
+  -d '{"status":"contacted"}' >/dev/null || fail "flow 13: mark contacted"
+curl -sf "http://localhost:$PORT/api/followups?hours=24" | grep -q "$FUP" && fail "flow 13: contacted lead still in queue"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$FUP" >/dev/null || fail "flow 13: cleanup"
+ok "flow 13: stale hot lead in follow-up queue; contacted clears it; stats count it"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "E2E: $PASS/11 passed"
+echo "E2E: $PASS/13 passed"

@@ -106,12 +106,17 @@ var server = http.createServer(function (req, res) {
       // Server-side re-score so stored tiers are trustworthy
       try {
         var r = scoring.scoreLead(lead.answers || {}, {});
-        lead.score = r.score; lead.tier = r.tier; lead.reasons = r.reasons;
+        lead.score = r.score; lead.tier = r.tier; lead.reasons = r.reasons; lead.spam = !!r.spam;
       } catch (e) { /* keep client values */ }
       var leads = readLeads();
+      // Duplicate check: same contact already on file within 30 days
+      try {
+        lead.duplicateOf = scoring.findDuplicates(leads, lead.answers || {}, 30).map(function (d) { return d.lead.id; });
+      } catch (e) { lead.duplicateOf = []; }
       leads.push(lead);
       writeLeads(leads);
-      send(res, 200, JSON.stringify({ ok: true, id: lead.id, tier: lead.tier }), "application/json");
+      send(res, 200, JSON.stringify({ ok: true, id: lead.id, tier: lead.tier,
+        duplicates: lead.duplicateOf.length }), "application/json");
     });
   }
 
@@ -119,13 +124,27 @@ var server = http.createServer(function (req, res) {
     return send(res, 200, JSON.stringify(readLeads()), "application/json");
   }
 
+  // Funnel snapshot for the inbox dashboard (?days=30).
+  if (url === "/api/stats" && req.method === "GET") {
+    var days = parseFloat(query.days);
+    return send(res, 200, JSON.stringify(scoring.funnelStats(readLeads(), isNaN(days) ? 30 : days)),
+      "application/json");
+  }
+
+  // Follow-up queue: hot/warm leads still 'new' after ?hours= (default 24).
+  if (url === "/api/followups" && req.method === "GET") {
+    var hours = parseFloat(query.hours);
+    return send(res, 200, JSON.stringify(scoring.needsFollowUp(readLeads(), isNaN(hours) ? 24 : hours)),
+      "application/json");
+  }
+
   if (url === "/api/export.csv" && req.method === "GET") {
     var leads = filterLeads(readLeads(), query);
-    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "reasons"]];
+    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "duplicates", "reasons"]];
     leads.forEach(function (l) {
       var a = l.answers || {};
       rows.push([l.id, l.createdAt, a.name, a.service, a.timeline, a.budget, a.location, a.contact,
-        l.tier, l.score, l.status || "new", (l.reasons || []).join(" | ")]);
+        l.tier, l.score, l.status || "new", (l.duplicateOf || []).join(";"), (l.reasons || []).join(" | ")]);
     });
     var csv = rows.map(function (r) { return r.map(csvEscape).join(","); }).join("\n");
     res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=leads.csv" });

@@ -125,8 +125,91 @@
     return { score: points, tier: tier, reasons: reasons.slice(0, 4), spam: spam };
   }
 
+  /* ---------------- Lead management (pure, server + inbox reuse) ---------------- */
+
+  // Normalize a contact handle for duplicate matching: emails lowercased,
+  // phone numbers reduced to digits. Returns "" when unusable.
+  function contactKey(answers) {
+    var c = String((answers && answers.contact) || "").trim().toLowerCase();
+    if (/@/.test(c)) return "email:" + c;
+    var digits = c.replace(/\D/g, "");
+    if (digits.length >= 7) return "phone:" + digits;
+    return "";
+  }
+
+  // Leads already on file with the same contact within `days` (default 30).
+  // Returns [{lead, daysApart}] newest-first. The candidate itself is not in
+  // `leads` yet when the server calls this, so no self-exclusion is needed.
+  function findDuplicates(leads, answers, days, nowMs) {
+    var key = contactKey(answers);
+    if (!key) return [];
+    var windowMs = (days == null ? 30 : Math.max(1, days)) * 86400000;
+    var now = nowMs || Date.now();
+    return (leads || [])
+      .filter(function (l) {
+        if (contactKey(l.answers) !== key) return false;
+        var t = l.createdAt ? new Date(l.createdAt).getTime() : 0;
+        return t > 0 && now - t >= 0 && now - t <= windowMs;
+      })
+      .map(function (l) {
+        return { lead: l, daysApart: Math.floor((now - new Date(l.createdAt).getTime()) / 86400000) };
+      })
+      .sort(function (a, b) {
+        var x = a.lead.createdAt || "", y = b.lead.createdAt || "";
+        return x < y ? 1 : (x > y ? -1 : 0);
+      });
+  }
+
+  // Hot/warm leads still 'new' after `hours` (default 24) — call them back.
+  // Sorted by score, highest first.
+  function needsFollowUp(leads, hours, nowMs) {
+    var cutoff = (nowMs || Date.now()) - Math.max(1, hours == null ? 24 : hours) * 3600000;
+    return (leads || [])
+      .filter(function (l) {
+        if (l.status && l.status !== "new") return false;
+        if (l.tier !== "hot" && l.tier !== "warm") return false;
+        var t = l.createdAt ? new Date(l.createdAt).getTime() : 0;
+        return t > 0 && t <= cutoff;
+      })
+      .sort(function (a, b) { return (b.score || 0) - (a.score || 0); });
+  }
+
+  // Funnel snapshot for the last `days` (default 30): volume, tier mix,
+  // spam rate, follow-up conversion, hot leads today.
+  function funnelStats(leads, days, nowMs) {
+    var now = nowMs || Date.now();
+    var windowMs = (days == null ? 30 : Math.max(1, days)) * 86400000;
+    var list = (leads || []).filter(function (l) {
+      var t = l.createdAt ? new Date(l.createdAt).getTime() : 0;
+      return t > 0 && now - t >= 0 && now - t <= windowMs;
+    });
+    var byTier = { hot: 0, warm: 0, cold: 0 };
+    var spam = 0, contacted = 0, scoreSum = 0, hotToday = 0;
+    var dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
+    list.forEach(function (l) {
+      if (byTier[l.tier] != null) byTier[l.tier]++;
+      if (l.spam) spam++;
+      if (l.status === "contacted") contacted++;
+      scoreSum += Number(l.score) || 0;
+      if (l.tier === "hot" && new Date(l.createdAt).getTime() >= dayStart.getTime()) hotToday++;
+    });
+    return {
+      total: list.length,
+      byTier: byTier,
+      avgScore: list.length ? Math.round((scoreSum / list.length) * 10) / 10 : 0,
+      spam: spam,
+      spamRate: list.length ? Math.round((spam / list.length) * 100) : 0,
+      contacted: contacted,
+      contactRate: list.length ? Math.round((contacted / list.length) * 100) : 0,
+      hotToday: hotToday
+    };
+  }
+
   /* ---------------- Browser widget ---------------- */
-  var api = { DEFAULTS: DEFAULTS, mergeConfig: mergeConfig, isOpenNow: isOpenNow, scoreLead: scoreLead, looksSpammy: looksSpammy };
+  var api = { DEFAULTS: DEFAULTS, mergeConfig: mergeConfig, isOpenNow: isOpenNow,
+    scoreLead: scoreLead, looksSpammy: looksSpammy,
+    contactKey: contactKey, findDuplicates: findDuplicates,
+    needsFollowUp: needsFollowUp, funnelStats: funnelStats };
 
   if (typeof window !== "undefined" && typeof document !== "undefined") {
     api.init = function (userConfig) {
