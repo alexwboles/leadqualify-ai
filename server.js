@@ -55,6 +55,18 @@ function csvEscape(v) {
 
 var scoring = require("./lib/scoring.js");
 
+// Pipeline stages (Pipedrive-style): every lead lives in exactly one.
+var STAGES = ["new", "contacted", "quoted", "won", "lost"];
+function leadStage(l) {
+  if (STAGES.indexOf(l.stage) !== -1) return l.stage;
+  return (l.status === "contacted") ? "contacted" : "new"; // legacy migration
+}
+function stageEnteredAt(l, stage) {
+  var ts = l.stageTs && l.stageTs[stage];
+  if (ts) return ts;
+  return l.createdAt; // before stage timestamps existed
+}
+
 function parseQuery(req) {
   var query = {};
   var idx = req.url.indexOf("?");
@@ -106,6 +118,8 @@ var server = http.createServer(function (req, res) {
       // Attribution: where the chat happened (homepage, pricing page, ad…).
       lead.source = String(lead.source || "").trim().slice(0, 60) || "website";
       lead.notes = Array.isArray(lead.notes) ? lead.notes.slice(0, 100) : [];
+      lead.stage = "new";
+      lead.stageTs = { "new": lead.createdAt };
       // Server-side re-score so stored tiers are trustworthy
       try {
         var r = scoring.scoreLead(lead.answers || {}, {});
@@ -124,7 +138,13 @@ var server = http.createServer(function (req, res) {
   }
 
   if (url === "/api/leads" && req.method === "GET") {
-    return send(res, 200, JSON.stringify(readLeads()), "application/json");
+    var all = readLeads();
+    // Normalize legacy leads: expose stage/stageTs even if stored without them.
+    all.forEach(function (l) {
+      l.stage = leadStage(l);
+      if (!l.stageTs) l.stageTs = {};
+    });
+    return send(res, 200, JSON.stringify(all), "application/json");
   }
 
   // Funnel snapshot for the inbox dashboard (?days=30).
@@ -143,11 +163,11 @@ var server = http.createServer(function (req, res) {
 
   if (url === "/api/export.csv" && req.method === "GET") {
     var leads = filterLeads(readLeads(), query);
-    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "source", "duplicates", "notes", "reasons"]];
+    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "stage", "source", "duplicates", "notes", "reasons"]];
     leads.forEach(function (l) {
       var a = l.answers || {};
       rows.push([l.id, l.createdAt, a.name, a.service, a.timeline, a.budget, a.location, a.contact,
-        l.tier, l.score, l.status || "new", l.source || "website", (l.duplicateOf || []).join(";"),
+        l.tier, l.score, l.status || "new", leadStage(l), l.source || "website", (l.duplicateOf || []).join(";"),
         (l.notes || []).map(function (n) { return n.at + " [" + (n.author || "me") + "] " + n.text; }).join(" | "),
         (l.reasons || []).join(" | ")]);
     });
@@ -178,8 +198,35 @@ var server = http.createServer(function (req, res) {
       var lead = leads.filter(function (l) { return l.id === id; })[0];
       if (!lead) return send(res, 404, "Lead not found");
       lead.status = status;
+      // keep stage in sync for the legacy two-state status
+      lead.stage = (status === "contacted") ? "contacted" : "new";
+      lead.stageTs = lead.stageTs || {};
+      lead.stageTs[lead.stage] = lead.stageTs[lead.stage] || new Date().toISOString();
       writeLeads(leads);
       send(res, 200, JSON.stringify({ ok: true, id: lead.id, status: lead.status }), "application/json");
+    });
+  }
+
+  // Move a lead along the pipeline (new -> contacted -> quoted -> won / lost).
+  var stageMatch = url.match(/^\/api\/lead\/([^/]+)\/stage$/);
+  if (stageMatch && req.method === "POST") {
+    return readBody(req, function (body) {
+      var payload;
+      try { payload = JSON.parse(body); } catch (e) { return send(res, 400, "Invalid JSON"); }
+      var stage = String(payload.stage || "");
+      if (STAGES.indexOf(stage) === -1) return send(res, 400, "stage must be one of: " + STAGES.join(", "));
+      var leads = readLeads();
+      var id = decodeURIComponent(stageMatch[1]);
+      var lead = leads.filter(function (l) { return l.id === id; })[0];
+      if (!lead) return send(res, 404, "Lead not found");
+      lead.stage = stage;
+      lead.stageTs = lead.stageTs || {};
+      lead.stageTs[stage] = new Date().toISOString();
+      // legacy status mirrors the first two stages
+      lead.status = (stage === "contacted" || stage === "quoted" || stage === "won") ? "contacted"
+        : (stage === "new" ? "new" : lead.status);
+      writeLeads(leads);
+      send(res, 200, JSON.stringify({ ok: true, id: lead.id, stage: lead.stage }), "application/json");
     });
   }
 
@@ -233,9 +280,11 @@ var server = http.createServer(function (req, res) {
           business: col("business") || "",
           source: col("source") || "csv-import",
           status: "new",
+          stage: "new",
           answers: answers,
           notes: []
         };
+        lead.stageTs = { "new": lead.createdAt };
         try {
           var r2 = scoring.scoreLead(answers, {});
           lead.score = r2.score; lead.tier = r2.tier; lead.reasons = r2.reasons; lead.spam = !!r2.spam;

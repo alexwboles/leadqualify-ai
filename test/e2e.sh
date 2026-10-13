@@ -208,5 +208,30 @@ let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
 curl -sf -X DELETE "http://localhost:$PORT/api/lead/$EVAN" >/dev/null || fail "flow 15: cleanup"
 ok "flow 15: CSV import scores rows, attributes source, stats + export expose it"
 
+# Flow 16: pipeline stages — new lead starts in "new", advances through the
+# pipeline, invalid stages rejected, stage lands in CSV export
+ID="e2e_stage_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$ID\",\"answers\":{\"name\":\"Piper Line\",\"service\":\"Remodel\",\"timeline\":\"this-week\",\"budget\":\"over2000\",\"location\":\"60601\",\"contact\":\"piper@example.com\"}}" >/dev/null \
+  || fail "flow 16: POST /api/lead"
+STAGE=$(curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='$ID';});
+  console.log(l ? l.stage : 'missing');
+});")
+[ "$STAGE" = "new" ] || fail "flow 16: new lead should start in 'new' (got $STAGE)"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/stage" -H 'Content-Type: application/json' \
+  -d '{"stage":"contacted"}' | grep -q '"stage":"contacted"' || fail "flow 16: advance to contacted"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/stage" -H 'Content-Type: application/json' \
+  -d '{"stage":"quoted"}' | grep -q '"stage":"quoted"' || fail "flow 16: advance to quoted"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/stage" -H 'Content-Type: application/json' \
+  -d '{"stage":"won"}' | grep -q '"stage":"won"' || fail "flow 16: advance to won"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$PORT/api/lead/$ID/stage" \
+  -H 'Content-Type: application/json' -d '{"stage":"bogus"}')
+[ "$CODE" = "400" ] || fail "flow 16: expected 400 for invalid stage (got $CODE)"
+curl -sf "http://localhost:$PORT/api/export.csv" | grep -q "$ID.*,won," || fail "flow 16: stage missing from CSV"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$ID" >/dev/null || fail "flow 16: cleanup"
+ok "flow 16: pipeline stages advance new->contacted->quoted->won; invalid rejected; CSV has stage"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "E2E: $PASS/15 passed"
+echo "E2E: $PASS/16 passed"

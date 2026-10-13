@@ -287,5 +287,19 @@ grep -q 'api/import.csv' inbox/index.html || fail "inbox missing import POST"
 grep -q 'source-tag' inbox/index.html || fail "inbox missing source tag"
 ok "inbox wires notes timeline, CSV import, source tags"
 
+# 22. pipeline board: view toggle + board renderer + stage buttons wired
+grep -q 'data-v="board"' inbox/index.html || fail "inbox missing board view toggle"
+grep -q 'renderBoard' inbox/index.html || fail "inbox missing renderBoard"
+grep -q 'data-stage-act' inbox/index.html || fail "inbox missing stage buttons"
+grep -q 'rot-badge' inbox/index.html || fail "inbox missing rotting badge"
+grep -q '/stage' inbox/index.html || fail "inbox missing stage POST"
+ok "inbox has List/Board toggle, kanban board, stage buttons, rotting flags"
+
+# 23. server exposes pipeline stage endpoint
+curl -sf "http://localhost:$PORT/api/leads" >/dev/null || fail "server not reachable"
+grep -q 'STAGES' server.js || fail "server missing STAGES"
+grep -q 'stageMatch' server.js || fail "server missing stage endpoint"
+ok "server exposes stage model + POST /api/lead/:id/stage"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "SMOKE: $PASS/23 passed"
+echo "SMOKE: $PASS/25 passed"

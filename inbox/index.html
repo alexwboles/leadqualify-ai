@@ -173,6 +173,35 @@
   .empty .big{font-size:40px;display:block;margin-bottom:12px}
   h2{font-size:19px;font-weight:700;margin:26px 0 12px;letter-spacing:-.01em}
 
+  /* ---- pipeline board (Pipedrive-style kanban) ---- */
+  .viewbar{display:flex;gap:10px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+  .board{display:grid;grid-template-columns:repeat(5,minmax(230px,1fr));gap:12px;align-items:start;
+    overflow-x:auto;padding-bottom:10px}
+  .bcol{background:#ece6d6;border:1px solid var(--line);min-width:230px;padding:0 0 10px}
+  .bcol-head{display:flex;align-items:center;gap:8px;padding:11px 13px;background:var(--ink);color:#f5f1e8;
+    font-size:12px;font-weight:800;letter-spacing:.1em;text-transform:uppercase;border-bottom:3px solid var(--ember)}
+  .bcol-head .n{margin-left:auto;font-family:ui-monospace,Menlo,Consolas,monospace;background:#000;color:#ffb48a;
+    font-size:12px;padding:2px 9px;letter-spacing:.05em}
+  .bcol.won .bcol-head{border-bottom-color:#16a34a}
+  .bcol.lost .bcol-head{border-bottom-color:#6b7280}
+  .bcard{background:var(--card);border:1px solid var(--line);border-left:5px solid var(--cold);
+    margin:10px 10px 0;padding:11px 13px;box-shadow:0 1px 4px rgba(60,45,25,.08)}
+  .bcard.hot{border-left-color:var(--hot)} .bcard.warm{border-left-color:var(--warm)}
+  .bcard .who{font-size:14.5px;font-weight:700;letter-spacing:-.01em;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .bcard .sub{font-size:12.5px;color:var(--muted);margin:3px 0 0}
+  .bcard .agerow{display:flex;align-items:center;gap:8px;margin-top:8px;font-size:12px;color:var(--muted)}
+  .rot-badge{display:inline-block;background:#fef3c7;color:#92400e;font-size:10.5px;font-weight:800;
+    padding:3px 9px;letter-spacing:.06em;text-transform:uppercase;border:1px solid #f59e0b}
+  .bcard .stagebtns{display:flex;gap:6px;margin-top:9px;padding-top:9px;border-top:1px dashed var(--line)}
+  .bcard .stagebtns button{flex:1;border:1px solid var(--line);background:#fff;color:var(--body);
+    font-family:var(--font);font-size:12px;font-weight:700;padding:7px 4px;cursor:pointer;min-height:34px}
+  .bcard .stagebtns button:hover{border-color:var(--ember);color:var(--ember-dark)}
+  .bcard .stagebtns button.win:hover{border-color:#16a34a;color:#16a34a}
+  .bcard .stagebtns button.lose:hover{border-color:#6b7280;color:#6b7280}
+  .bcard .stagebtns button:focus-visible{outline:2px solid var(--ember);outline-offset:1px}
+  .bempty{color:var(--muted);font-size:13px;text-align:center;padding:18px 8px;border:1px dashed var(--line);
+    margin:10px 10px 0;background:rgba(255,255,255,.5)}
+
   @media (max-width:900px){
     .app{flex-direction:column}
     .sidebar{width:100%;flex:none;height:auto;position:static;padding:16px}
@@ -227,11 +256,17 @@
       </div>
       <div class="stats" id="stats"></div>
     </div>
-    <div class="toolbar" id="filters" role="group" aria-label="Filter by tier">
-      <button class="chip active" data-f="all">All</button>
-      <button class="chip" data-f="hot">Hot</button>
-      <button class="chip" data-f="warm">Warm</button>
-      <button class="chip" data-f="cold">Cold</button>
+    <div class="viewbar">
+      <div class="toolbar" id="viewtoggle" role="group" aria-label="View" style="margin-bottom:0">
+        <button class="chip active" data-v="list" type="button">List</button>
+        <button class="chip" data-v="board" type="button">Board</button>
+      </div>
+      <div class="toolbar" id="filters" role="group" aria-label="Filter by tier" style="margin-bottom:0">
+        <button class="chip active" data-f="all">All</button>
+        <button class="chip" data-f="hot">Hot</button>
+        <button class="chip" data-f="warm">Warm</button>
+        <button class="chip" data-f="cold">Cold</button>
+      </div>
     </div>
     <div class="finder">
       <input class="search" id="search" type="search" placeholder="Search name, contact, service…" aria-label="Search leads">
@@ -247,7 +282,21 @@
   </main>
 </div>
 <script>
-var filter = "all", dateRange = "all", searchQ = "", leads = [];
+var filter = "all", dateRange = "all", searchQ = "", leads = [], view = "list";
+var STAGES = ["new", "contacted", "quoted", "won", "lost"];
+var STAGE_LABEL = { new: "New", contacted: "Contacted", quoted: "Quoted", won: "Won", lost: "Lost" };
+var ROT_DAYS = 7; // Pipedrive-style rotting: idle this long in a live stage gets flagged
+
+function leadStageOf(l) {
+  if (STAGES.indexOf(l.stage) !== -1) return l.stage;
+  return (l.status === "contacted") ? "contacted" : "new";
+}
+function daysInStage(l) {
+  var stage = leadStageOf(l);
+  var ts = (l.stageTs && l.stageTs[stage]) || l.createdAt;
+  if (!ts) return 0;
+  return Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 86400000));
+}
 
 function matchesFinder(l) {
   if (dateRange !== "all") {
@@ -306,6 +355,7 @@ function render() {
   document.getElementById("count-line").textContent =
     shown.length === leads.length ? "" :
     "Showing " + shown.length + " of " + leads.length + " leads.";
+  if (view === "board") { renderBoard(shown); return; }
   if (!shown.length) {
     list.innerHTML = '<div class="empty"><span class="big" aria-hidden="true"><svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#c2410c" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg></span>No leads match. ' +
       (leads.length ? 'Try clearing the search or filters.' : '<a href="/demo/">Open the demo site</a> and chat with the widget — after-hours leads land here automatically.') + '</div>';
@@ -361,6 +411,70 @@ function meta(label, value) {
   return '<span><strong>' + label + ':</strong> ' + esc(value || "—") + '</span>';
 }
 
+// Pipeline board: Pipedrive-style kanban with stage columns, per-column counts,
+// advance/back buttons, and rotting flags for leads idle too long in a stage.
+function renderBoard(shown) {
+  var list = document.getElementById("list");
+  var html = '<div class="board" role="list" aria-label="Pipeline board">';
+  STAGES.forEach(function (stage) {
+    var col = shown.filter(function (l) { return leadStageOf(l) === stage; });
+    col.sort(function (x, y) { return (y.score || 0) - (x.score || 0); });
+    var idx = STAGES.indexOf(stage);
+    html += '<div class="bcol ' + stage + '" role="listitem"><div class="bcol-head">' +
+      STAGE_LABEL[stage] + '<span class="n">' + col.length + '</span></div>';
+    if (!col.length) {
+      html += '<div class="bempty">No leads here</div>';
+    }
+    col.forEach(function (l) {
+      var a = l.answers || {};
+      var tier = l.tier || "cold";
+      var score = l.score || 0;
+      var days = daysInStage(l);
+      var rotting = (stage !== "won" && stage !== "lost" && days >= ROT_DAYS);
+      html += '<div class="bcard ' + tier + '"><div class="who">' + esc(a.name || "Unknown") +
+        badge(tier) + '</div>' +
+        '<p class="sub">' + esc(a.service || "—") + ' · ' + score + '/100</p>' +
+        '<p class="sub">' + esc(a.contact || "") + '</p>' +
+        '<div class="agerow"><span>' + days + 'd in stage</span>' +
+        (rotting ? '<span class="rot-badge">stalling</span>' : '') + '</div>' +
+        '<div class="stagebtns">' +
+        (idx > 0 ? '<button type="button" data-stage-act="back" data-id="' + esc(l.id) +
+          '" data-to="' + STAGES[idx - 1] + '" title="Move back">←</button>' : '') +
+        (idx < 3 ? '<button type="button" data-stage-act="fwd" data-id="' + esc(l.id) +
+          '" data-to="' + STAGES[idx + 1] + '">Advance →</button>' : '') +
+        (stage !== "won" ? '<button type="button" class="win" data-stage-act="fwd" data-id="' + esc(l.id) +
+          '" data-to="won" title="Mark as won">Won</button>' : '') +
+        (stage !== "lost" ? '<button type="button" class="lose" data-stage-act="fwd" data-id="' + esc(l.id) +
+          '" data-to="lost" title="Mark as lost">Lost</button>' : '') +
+        '</div></div>';
+    });
+    html += '</div>';
+  });
+  html += '</div>';
+  list.innerHTML = html;
+}
+
+function moveStage(id, to) {
+  var lead = null;
+  for (var i = 0; i < leads.length; i++) if (leads[i].id === id) lead = leads[i];
+  if (!lead) return;
+  function apply() {
+    lead.stage = to;
+    lead.stageTs = lead.stageTs || {};
+    lead.stageTs[to] = new Date().toISOString();
+    if (to === "contacted" || to === "quoted" || to === "won") lead.status = "contacted";
+    if (to === "new") lead.status = "new";
+    render();
+  }
+  fetch("/api/lead/" + encodeURIComponent(id) + "/stage", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ stage: to })
+  }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(apply)
+    .catch(function () { alert("Couldn't move that lead — is the server running?"); });
+}
+
 // Follow-up queue: hot/warm leads sitting uncontacted for 24h+.
 function renderFollowups() {
   var box = document.getElementById("followups");
@@ -383,6 +497,15 @@ function loadMeta() {
   fetch("/api/followups").then(function (r) { return r.json(); }).then(function (f) { followups = f; render(); }).catch(function () {});
 }
 
+document.getElementById("viewtoggle").addEventListener("click", function (e) {
+  if (e.target.dataset.v) {
+    view = e.target.dataset.v;
+    var chips = this.querySelectorAll(".chip");
+    for (var i = 0; i < chips.length; i++) chips[i].classList.remove("active");
+    e.target.classList.add("active");
+    render();
+  }
+});
 document.getElementById("filters").addEventListener("click", function (e) {
   if (e.target.dataset.f) {
     filter = e.target.dataset.f;
@@ -406,6 +529,11 @@ document.getElementById("search").addEventListener("input", function (e) {
   render();
 });
 document.getElementById("list").addEventListener("click", function (e) {
+  var stg = e.target.closest("[data-stage-act]");
+  if (stg) {
+    moveStage(stg.getAttribute("data-id"), stg.getAttribute("data-to"));
+    return;
+  }
   var btn = e.target.closest("[data-act]");
   if (!btn) return;
   var id = btn.getAttribute("data-id");
