@@ -19,6 +19,7 @@
     tagline: "We usually reply within a few minutes.",
     apiBase: "", // same-origin by default; set to your server URL when embedded elsewhere
     primaryColor: "#2563eb",
+    source: "website", // attribution stamped on every captured lead (e.g. "homepage", "pricing-page", "adwords")
     businessHours: { open: 9, close: 17, days: [1, 2, 3, 4, 5] }, // Mon-Fri 9-5
     openMessage: "Hi there! Want a fast quote? Answer 5 quick questions and we'll get right back to you.",
     afterHoursMessage: "We're closed right now, but leave your details below and we'll call you first thing in the morning.",
@@ -127,6 +128,49 @@
 
   /* ---------------- Lead management (pure, server + inbox reuse) ---------------- */
 
+  // Minimal RFC-4180-ish CSV parser (pure, no DOM): handles quoted fields,
+  // escaped quotes (""), and CRLF. Returns { headers: [lower-cased], rows: [[...]] }.
+  function parseCsv(text) {
+    var rows = [];
+    var row = [];
+    var field = "";
+    var inQuotes = false;
+    var s = String(text || "").replace(/^\uFEFF/, "");
+    for (var i = 0; i < s.length; i++) {
+      var ch = s[i];
+      if (inQuotes) {
+        if (ch === '"') {
+          if (s[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += ch;
+      } else if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ",") {
+        row.push(field); field = "";
+      } else if (ch === "\r" || ch === "\n") {
+        row.push(field); field = "";
+        rows.push(row); row = [];
+        if (ch === "\r" && s[i + 1] === "\n") i++;
+        // skip leading blank rows later; keep row even if empty for now
+      } else field += ch;
+    }
+    row.push(field);
+    rows.push(row);
+    // Trailing blank rows are just the file's final newline — drop them, not skipped rows.
+    while (rows.length && !rows[rows.length - 1].some(function (c) { return String(c).trim() !== ""; })) {
+      rows.pop();
+    }
+    var skipped = 0;
+    rows = rows.filter(function (r) {
+      var blank = !r.some(function (c) { return String(c).trim() !== ""; });
+      if (blank) skipped++;
+      return !blank;
+    });
+    if (!rows.length) return { headers: [], rows: [], skipped: skipped };
+    var headers = rows[0].map(function (h) { return String(h).trim().toLowerCase(); });
+    return { headers: headers, rows: rows.slice(1), skipped: skipped };
+  }
+
   // Normalize a contact handle for duplicate matching: emails lowercased,
   // phone numbers reduced to digits. Returns "" when unusable.
   function contactKey(answers) {
@@ -175,7 +219,7 @@
   }
 
   // Funnel snapshot for the last `days` (default 30): volume, tier mix,
-  // spam rate, follow-up conversion, hot leads today.
+  // spam rate, follow-up conversion, hot leads today, and source attribution.
   function funnelStats(leads, days, nowMs) {
     var now = nowMs || Date.now();
     var windowMs = (days == null ? 30 : Math.max(1, days)) * 86400000;
@@ -184,10 +228,13 @@
       return t > 0 && now - t >= 0 && now - t <= windowMs;
     });
     var byTier = { hot: 0, warm: 0, cold: 0 };
+    var bySource = {};
     var spam = 0, contacted = 0, scoreSum = 0, hotToday = 0;
     var dayStart = new Date(now); dayStart.setHours(0, 0, 0, 0);
     list.forEach(function (l) {
       if (byTier[l.tier] != null) byTier[l.tier]++;
+      var src = String(l.source || "unknown");
+      bySource[src] = (bySource[src] || 0) + 1;
       if (l.spam) spam++;
       if (l.status === "contacted") contacted++;
       scoreSum += Number(l.score) || 0;
@@ -196,6 +243,7 @@
     return {
       total: list.length,
       byTier: byTier,
+      bySource: bySource,
       avgScore: list.length ? Math.round((scoreSum / list.length) * 10) / 10 : 0,
       spam: spam,
       spamRate: list.length ? Math.round((spam / list.length) * 100) : 0,
@@ -209,7 +257,7 @@
   var api = { DEFAULTS: DEFAULTS, mergeConfig: mergeConfig, isOpenNow: isOpenNow,
     scoreLead: scoreLead, looksSpammy: looksSpammy,
     contactKey: contactKey, findDuplicates: findDuplicates,
-    needsFollowUp: needsFollowUp, funnelStats: funnelStats };
+    needsFollowUp: needsFollowUp, funnelStats: funnelStats, parseCsv: parseCsv };
 
   if (typeof window !== "undefined" && typeof document !== "undefined") {
     api.init = function (userConfig) {
@@ -364,6 +412,7 @@
           id: "lead_" + Date.now().toString(36),
           createdAt: new Date().toISOString(),
           business: config.businessName,
+          source: config.source || "website",
           afterHours: !state.open,
           answers: state.answers,
           score: result.score,

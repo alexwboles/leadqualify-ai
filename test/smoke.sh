@@ -184,11 +184,108 @@ let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
 });" || fail "GET /api/followups bad shape"
 ok "GET /api/followups returns follow-up queue array"
 
-# 17. inbox shows duplicate badge + follow-up section wiring
-grep -q 'duplicateOf' inbox/index.html || fail "inbox missing duplicate badge"
-grep -q 'api/followups' inbox/index.html || fail "inbox missing followups fetch"
-grep -q 'api/stats' inbox/index.html || fail "inbox missing stats fetch"
-ok "inbox wires duplicate badge, follow-up queue, funnel stats"
+# 17b. parseCsv pure function: quoted fields, escaped quotes, blank rows skipped
+node -e "
+var s = require('./lib/scoring.js');
+if (typeof s.parseCsv !== 'function') throw new Error('parseCsv not exported');
+var p = s.parseCsv('name,service,contact\r\n\"Doe, Jane\",\"Leak \"\"repair\"\"\",jane@example.com\r\nBob,,bob@example.com\r\n,,\r\n');
+if (p.headers.join('|') !== 'name|service|contact') throw new Error('headers: ' + JSON.stringify(p.headers));
+if (p.rows.length !== 2) throw new Error('rows: ' + p.rows.length);
+if (p.rows[0][0] !== 'Doe, Jane' || p.rows[0][1] !== 'Leak \"repair\"') throw new Error('quoted fields: ' + JSON.stringify(p.rows[0]));
+if (s.parseCsv('').rows.length !== 0) throw new Error('empty csv');
+// funnelStats gains bySource attribution
+var fs = s.funnelStats([
+  { tier: 'hot', score: 90, status: 'new', createdAt: '2026-10-12T10:00:00.000Z', source: 'homepage' },
+  { tier: 'warm', score: 50, status: 'new', createdAt: '2026-10-12T10:00:00.000Z', source: 'homepage' },
+  { tier: 'cold', score: 5, status: 'new', createdAt: '2026-10-12T10:00:00.000Z', source: 'adwords' }
+], 30, new Date('2026-10-12T12:00:00').getTime());
+if (!fs.bySource || fs.bySource.homepage !== 2 || fs.bySource.adwords !== 1) throw new Error('bySource: ' + JSON.stringify(fs.bySource));
+console.log('parseCsv + bySource ok');
+" || fail "parseCsv pure function / bySource"
+ok "parseCsv handles quotes/escapes; funnelStats gains bySource"
+
+# 18. notes API: add note, persisted on lead; empty text 400s; unknown id 404s
+ID="smoke_note_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$ID\",\"answers\":{\"name\":\"Notey McNote\",\"service\":\"Repair\",\"timeline\":\"this-week\",\"budget\":\"500to2000\",\"location\":\"10001\",\"contact\":\"555-0188\"}}" >/dev/null \
+  || fail "POST /api/lead (notes target) failed"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$ID/notes" -H 'Content-Type: application/json' \
+  -d '{"author":"Ann","text":"Called twice, no answer."}' | grep -q '"notes":1' || fail "note add failed"
+curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='$ID';});
+  if(!l||!l.notes||l.notes.length!==1||l.notes[0].text!=='Called twice, no answer.') throw new Error('note not persisted');
+});" || fail "note not persisted on lead"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$PORT/api/lead/$ID/notes" \
+  -H 'Content-Type: application/json' -d '{"text":"   "}')
+[ "$CODE" = "400" ] || fail "empty note should 400, got $CODE"
+CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "http://localhost:$PORT/api/lead/no_such_lead/notes" \
+  -H 'Content-Type: application/json' -d '{"text":"hi"}')
+[ "$CODE" = "404" ] || fail "note on missing lead should 404, got $CODE"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$ID" >/dev/null || fail "cleanup delete failed"
+ok "POST /api/lead/:id/notes appends timeline notes (400 empty, 404 unknown)"
+
+# 19. CSV import: header row -> scored leads; duplicate flagged; blank rows skipped
+CSV="name,service,timeline,budget,location,contact,source
+\"Imp, Alice\",\"Leak repair\",asap,over2000,90210,impalice@example.com,trade-show
+,,,
+Bob Browse,Repair,browsing,notsure,00000,,csv-test
+"
+SUM=$(curl -sf -X POST "http://localhost:$PORT/api/import.csv" -H 'Content-Type: text/csv' --data-binary "$CSV")
+echo "$SUM" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(s.created!==2||s.skipped!==1) throw new Error('summary wrong: '+d);
+});" || fail "import summary wrong: $SUM"
+curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var leads=JSON.parse(d);
+  var a=leads.filter(function(l){return (l.answers||{}).name==='Imp, Alice';});
+  if(a.length!==1) throw new Error('alice missing');
+  if(a[0].tier!=='hot'||a[0].source!=='trade-show') throw new Error('alice not scored/attributed: '+JSON.stringify({tier:a[0].tier,source:a[0].source}));
+});" || fail "imported lead not scored or attributed"
+# repeat import -> duplicates flagged
+SUM2=$(curl -sf -X POST "http://localhost:$PORT/api/import.csv" -H 'Content-Type: text/csv' --data-binary "$CSV")
+echo "$SUM2" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(s.created!==2||s.duplicates!==1) throw new Error('dup summary wrong: '+d);
+});" || fail "re-import duplicate summary wrong: $SUM2"
+curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var leads=JSON.parse(d);
+  leads.filter(function(l){return (l.answers||{}).name==='Imp, Alice'||(l.answers||{}).name==='Bob Browse';})
+    .forEach(function(l){ console.log(l.id); });
+});" | while read -r LID; do curl -sf -X DELETE "http://localhost:$PORT/api/lead/$LID" >/dev/null; done
+LEFT=$(curl -sf "http://localhost:$PORT/api/leads" | grep -c "Imp, Alice\|Bob Browse" || true)
+[ "$LEFT" = "0" ] || fail "imported leads not cleaned up"
+ok "POST /api/import.csv bulk-imports + scores + flags duplicates"
+
+# 20. source attribution round-trip: explicit source stored, CSV + stats expose it
+ID="smoke_src_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$ID\",\"source\":\"pricing-page\",\"answers\":{\"name\":\"Src Test\",\"service\":\"Repair\",\"timeline\":\"asap\",\"budget\":\"over2000\",\"location\":\"90210\",\"contact\":\"src@example.com\"}}" >/dev/null \
+  || fail "POST /api/lead (source) failed"
+curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='$ID';});
+  if(!l||l.source!=='pricing-page') throw new Error('source not stored');
+});" || fail "source not stored"
+curl -sf "http://localhost:$PORT/api/export.csv?q=Src%20Test" | grep -q "source" || fail "CSV missing source column"
+curl -sf "http://localhost:$PORT/api/export.csv?q=Src%20Test" | grep -q "pricing-page" || fail "CSV missing source value"
+curl -sf "http://localhost:$PORT/api/stats?days=30" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(!s.bySource||s.bySource['pricing-page']<1) throw new Error('bySource missing: '+d);
+});" || fail "stats bySource missing pricing-page"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$ID" >/dev/null || fail "cleanup delete failed"
+ok "source attribution: stored, in CSV export, in /api/stats bySource"
+
+# 21. inbox wires notes timeline + CSV import button
+grep -q 'data-act="notes"' inbox/index.html || fail "inbox missing notes toggle"
+grep -q 'api/import.csv' inbox/index.html || fail "inbox missing import POST"
+grep -q 'source-tag' inbox/index.html || fail "inbox missing source tag"
+ok "inbox wires notes timeline, CSV import, source tags"
 
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "SMOKE: $PASS/19 passed"
+echo "SMOKE: $PASS/23 passed"

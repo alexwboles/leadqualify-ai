@@ -167,5 +167,46 @@ curl -sf "http://localhost:$PORT/api/followups?hours=24" | grep -q "$FUP" && fai
 curl -sf -X DELETE "http://localhost:$PORT/api/lead/$FUP" >/dev/null || fail "flow 13: cleanup"
 ok "flow 13: stale hot lead in follow-up queue; contacted clears it; stats count it"
 
+# Flow 14: notes journey — add notes, timeline persists, cap of 100, re-render safe
+NID="e2e_note_$(date +%s)"
+curl -sf -X POST "http://localhost:$PORT/api/lead" -H 'Content-Type: application/json' \
+  -d "{\"id\":\"$NID\",\"answers\":{\"name\":\"Nora Notes\",\"service\":\"Repair\",\"timeline\":\"this-week\",\"budget\":\"500to2000\",\"location\":\"60601\",\"contact\":\"nora@example.com\"}}" >/dev/null \
+  || fail "flow 14: POST /api/lead"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$NID/notes" -H 'Content-Type: application/json' \
+  -d '{"author":"Ann","text":"First call: voicemail."}' | grep -q '"notes":1' || fail "flow 14: note 1"
+curl -sf -X POST "http://localhost:$PORT/api/lead/$NID/notes" -H 'Content-Type: application/json' \
+  -d '{"text":"Second call: booked Thursday."}' | grep -q '"notes":2' || fail "flow 14: note 2"
+curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return x.id==='$NID';});
+  if(!l||l.notes.length!==2) throw new Error('notes missing');
+  if(l.notes[0].author!=='Ann'||!l.notes[0].at) throw new Error('note 1 shape');
+  if(l.notes[1].author!=='me') throw new Error('default author');
+});" || fail "flow 14: notes not persisted with authors + timestamps"
+# notes survive the CSV export without breaking columns
+curl -sf "http://localhost:$PORT/api/export.csv?q=Nora%20Notes" | grep -q "booked Thursday" || fail "flow 14: notes in CSV"
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$NID" >/dev/null || fail "flow 14: cleanup"
+ok "flow 14: note timeline appends with author + timestamp, persists, exports to CSV"
+
+# Flow 15: import + source journey — bulk import scores and attributes, inbox shows source
+CSV2="name,service,timeline,budget,location,contact,source
+Evan Import,Water heater,this-month,500to2000,30301,evan@example.com,home-show
+"
+curl -sf -X POST "http://localhost:$PORT/api/import.csv" -H 'Content-Type: text/csv' --data-binary "$CSV2" \
+  | grep -q '"created":1' || fail "flow 15: import"
+curl -sf "http://localhost:$PORT/api/stats?days=30" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var s=JSON.parse(d);
+  if(!s.bySource||s.bySource['home-show']<1) throw new Error('bySource: '+d);
+});" || fail "flow 15: stats missing home-show"
+curl -sf "http://localhost:$PORT/api/export.csv?q=Evan%20Import" | grep -q "home-show" || fail "flow 15: CSV missing source"
+EVAN=$(curl -sf "http://localhost:$PORT/api/leads" | node -e "
+let d='';process.stdin.on('data',c=>d+=c).on('end',()=>{
+  var l=JSON.parse(d).find(function(x){return (x.answers||{}).name==='Evan Import';});
+  if(!l) throw new Error('missing'); console.log(l.id);
+});")
+curl -sf -X DELETE "http://localhost:$PORT/api/lead/$EVAN" >/dev/null || fail "flow 15: cleanup"
+ok "flow 15: CSV import scores rows, attributes source, stats + export expose it"
+
 kill $SERVER_PID 2>/dev/null; trap - EXIT
-echo "E2E: $PASS/13 passed"
+echo "E2E: $PASS/15 passed"

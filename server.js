@@ -103,6 +103,9 @@ var server = http.createServer(function (req, res) {
       if (!lead || typeof lead !== "object") return send(res, 400, "Invalid lead");
       lead.id = lead.id || ("lead_" + Date.now().toString(36));
       lead.createdAt = lead.createdAt || new Date().toISOString();
+      // Attribution: where the chat happened (homepage, pricing page, ad…).
+      lead.source = String(lead.source || "").trim().slice(0, 60) || "website";
+      lead.notes = Array.isArray(lead.notes) ? lead.notes.slice(0, 100) : [];
       // Server-side re-score so stored tiers are trustworthy
       try {
         var r = scoring.scoreLead(lead.answers || {}, {});
@@ -140,11 +143,13 @@ var server = http.createServer(function (req, res) {
 
   if (url === "/api/export.csv" && req.method === "GET") {
     var leads = filterLeads(readLeads(), query);
-    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "duplicates", "reasons"]];
+    var rows = [["id", "createdAt", "name", "service", "timeline", "budget", "location", "contact", "tier", "score", "status", "source", "duplicates", "notes", "reasons"]];
     leads.forEach(function (l) {
       var a = l.answers || {};
       rows.push([l.id, l.createdAt, a.name, a.service, a.timeline, a.budget, a.location, a.contact,
-        l.tier, l.score, l.status || "new", (l.duplicateOf || []).join(";"), (l.reasons || []).join(" | ")]);
+        l.tier, l.score, l.status || "new", l.source || "website", (l.duplicateOf || []).join(";"),
+        (l.notes || []).map(function (n) { return n.at + " [" + (n.author || "me") + "] " + n.text; }).join(" | "),
+        (l.reasons || []).join(" | ")]);
     });
     var csv = rows.map(function (r) { return r.map(csvEscape).join(","); }).join("\n");
     res.writeHead(200, { "Content-Type": "text/csv; charset=utf-8", "Content-Disposition": "attachment; filename=leads.csv" });
@@ -175,6 +180,76 @@ var server = http.createServer(function (req, res) {
       lead.status = status;
       writeLeads(leads);
       send(res, 200, JSON.stringify({ ok: true, id: lead.id, status: lead.status }), "application/json");
+    });
+  }
+
+  // Append a timestamped note to a lead's activity timeline.
+  var noteMatch = url.match(/^\/api\/lead\/([^/]+)\/notes$/);
+  if (noteMatch && req.method === "POST") {
+    return readBody(req, function (body) {
+      var payload;
+      try { payload = JSON.parse(body); } catch (e) { return send(res, 400, "Invalid JSON"); }
+      var text = String(payload.text || "").trim();
+      if (!text) return send(res, 400, "Note text is required");
+      var leads = readLeads();
+      var id = decodeURIComponent(noteMatch[1]);
+      var lead = leads.filter(function (l) { return l.id === id; })[0];
+      if (!lead) return send(res, 404, "Lead not found");
+      lead.notes = Array.isArray(lead.notes) ? lead.notes : [];
+      lead.notes.push({
+        at: new Date().toISOString(),
+        author: String(payload.author || "me").trim().slice(0, 60) || "me",
+        text: text.slice(0, 1000)
+      });
+      while (lead.notes.length > 100) lead.notes.shift();
+      writeLeads(leads);
+      send(res, 200, JSON.stringify({ ok: true, id: lead.id, notes: lead.notes.length }), "application/json");
+    });
+  }
+
+  // Bulk import: POST a CSV body with a header row (name,service,timeline,
+  // budget,location,contact[,source]). Each row is scored + duplicate-checked
+  // exactly like a chat capture. Returns {created, duplicates, skipped}.
+  if (url === "/api/import.csv" && req.method === "POST") {
+    return readBody(req, function (body) {
+      var parsed;
+      try { parsed = scoring.parseCsv(body); }
+      catch (e) { return send(res, 400, "Could not parse CSV"); }
+      var idx = {};
+      parsed.headers.forEach(function (h, i) { if (!(h in idx)) idx[h] = i; });
+      if (idx.name === undefined && idx.contact === undefined) {
+        return send(res, 400, "CSV needs at least a 'name' or 'contact' header");
+      }
+      var leads = readLeads();
+      var created = 0, duplicates = 0, skipped = parsed.skipped || 0;
+      parsed.rows.forEach(function (r) {
+        function col(name) { return idx[name] === undefined ? "" : String(r[idx[name]] || "").trim(); }
+        var answers = { name: col("name"), service: col("service"), timeline: col("timeline"),
+          budget: col("budget"), location: col("location"), contact: col("contact") };
+        if (!answers.name && !answers.contact) { skipped++; return; }
+        var lead = {
+          id: "lead_" + Date.now().toString(36) + "_" + created,
+          createdAt: new Date().toISOString(),
+          business: col("business") || "",
+          source: col("source") || "csv-import",
+          status: "new",
+          answers: answers,
+          notes: []
+        };
+        try {
+          var r2 = scoring.scoreLead(answers, {});
+          lead.score = r2.score; lead.tier = r2.tier; lead.reasons = r2.reasons; lead.spam = !!r2.spam;
+        } catch (e) { /* keep un-scored */ }
+        try {
+          lead.duplicateOf = scoring.findDuplicates(leads, answers, 30).map(function (d) { return d.lead.id; });
+          if (lead.duplicateOf.length) duplicates++;
+        } catch (e) { lead.duplicateOf = []; }
+        leads.push(lead);
+        created++;
+      });
+      writeLeads(leads);
+      send(res, 200, JSON.stringify({ ok: true, created: created, duplicates: duplicates, skipped: skipped }),
+        "application/json");
     });
   }
 

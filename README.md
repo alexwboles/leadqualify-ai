@@ -46,9 +46,10 @@ Tiers: **🔥 hot ≥ 70**, **🟡 warm 40–69**, **🔵 cold < 40**. Every sco
 ```
 widget/leadqualify.js   the embeddable widget (also the scoring source of truth; require()-able in Node)
 lib/scoring.js          thin Node wrapper re-exporting the widget's pure logic
-server.js               zero-dependency Node server: static files + /api/lead, /api/leads, /api/export.csv, /api/score
+server.js               zero-dependency Node server: static files + /api/lead, /api/leads, /api/export.csv, /api/score, /api/stats, /api/followups, /api/import.csv, /api/lead/:id/notes
 demo/index.html         fake plumber site with the widget live
-inbox/index.html        lead inbox: filter by tier, live refresh, CSV export
+inbox/index.html        lead inbox: tier/date/search filters, duplicate badges, follow-up queue,
+                      funnel stats, per-lead note timelines, CSV import/export, source attribution
 config/                 sample business configs
 data/leads.json         created at runtime (git-ignored)
 test/smoke.sh test/e2e.sh
@@ -59,6 +60,6 @@ All logic runs locally. Leads are POSTed only to **your own** `apiBase` — noth
 
 ## Tests
 ```bash
-bash test/smoke.sh   # 10 checks
-bash test/e2e.sh     # 7 flows
+bash test/smoke.sh   # 23 checks
+bash test/e2e.sh     # 15 flows
 ```

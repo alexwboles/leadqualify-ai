@@ -109,6 +109,29 @@
   .followups .sub{margin:0 0 8px;color:var(--muted);font-size:13px}
   .fu-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid #fde68a;font-size:14px}
   .fu-row .muted{color:var(--muted);font-size:12.5px;margin-left:auto}
+  .source-tag{display:inline-block;background:#eef2ff;color:#3730a3;font-size:11px;font-weight:700;
+    border-radius:0;padding:3px 10px;letter-spacing:.05em;text-transform:uppercase}
+
+  /* ---- per-lead notes timeline ---- */
+  .notes{display:none;margin-top:12px;border:1px solid var(--line);background:#fbfaf6}
+  .notes.open{display:block}
+  .note{padding:10px 16px;border-bottom:1px dashed var(--line);font-size:13.5px}
+  .note:last-of-type{border-bottom:none}
+  .note .n-when{color:var(--muted);font-size:12px}
+  .note .n-author{font-weight:700;margin-right:8px}
+  .note-add{display:flex;gap:8px;padding:10px 14px;border-top:1px solid var(--line);background:#fff}
+  .note-add input{flex:1;border:1px solid var(--line);padding:9px 12px;min-height:40px;
+    font-size:13.5px;font-family:var(--font);border-radius:0;color:var(--body)}
+  .note-add input:focus{outline:2px solid var(--ember);outline-offset:1px;border-color:var(--ember)}
+  .note-add button{border:none;background:var(--ink);color:#fff;font-family:var(--font);
+    border-radius:0;padding:9px 18px;min-height:40px;font-size:13.5px;font-weight:650;cursor:pointer}
+  .note-add button:hover{background:#241f17}
+  .import-btn{display:flex;align-items:center;justify-content:center;gap:9px;margin-top:10px;
+    background:transparent;color:#d8cfba;border:1px solid var(--ink-line);text-decoration:none;
+    font-size:14px;font-weight:650;border-radius:0;padding:11px 14px;cursor:pointer;width:100%;
+    font-family:var(--font)}
+  .import-btn:hover{border-color:var(--ember);color:#fff}
+  .import-btn:focus-visible{outline:2px solid #ffb48a;outline-offset:2px}
 
   /* ---- lead cards ---- */
   .lead{background:var(--card);border:1px solid var(--line);border-radius:0;
@@ -185,6 +208,10 @@
     <a href="#" id="export" class="export-btn">
       <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
       Export CSV</a>
+    <button id="import-btn" class="import-btn" type="button">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Import CSV</button>
+    <input type="file" id="import-file" accept=".csv,text/csv" style="display:none" aria-hidden="true">
     <div class="sidebar-foot">
       <span class="status-dot"></span><span class="live">Auto-capture live</span>
       <p>Leads land here the moment a visitor finishes the chat — hot ones first. Refreshes every 15&nbsp;seconds.</p>
@@ -293,6 +320,17 @@ function render() {
     var contacted = (l.status || "new") === "contacted";
     var when = "";
     try { when = new Date(l.createdAt).toLocaleString(); } catch (e) { when = esc(l.createdAt || ""); }
+    var notes = Array.isArray(l.notes) ? l.notes : [];
+    var noteCount = notes.length;
+    var notesHtml = notes.map(function (n) {
+      var at = "";
+      try { at = new Date(n.at).toLocaleString(); } catch (e) { at = esc(n.at || ""); }
+      return '<div class="note"><span class="n-author">' + esc(n.author || "me") + '</span>' +
+        '<span class="n-when">' + at + '</span><br>' + esc(n.text) + '</div>';
+    }).join("") +
+      '<div class="note-add"><input type="text" placeholder="Add a note…" aria-label="Add a note" ' +
+      'data-note-input="' + esc(l.id) + '" maxlength="1000">' +
+      '<button type="button" data-note-add="' + esc(l.id) + '">Add</button></div>';
     return '<div class="lead' + (contacted ? ' contacted' : '') + '"><div class="heat ' + tier + '"></div><div class="lead-body">' +
       '<div class="lead-head"><div class="who">' +
       '<span class="avatar ' + tier + '">' + esc(initial) + '</span>' +
@@ -304,14 +342,17 @@ function render() {
       '<div class="meta">' +
       meta("Service", a.service) + meta("Timeline", a.timeline) + meta("Budget", a.budget) +
       meta("Location", a.location) + meta("Contact", a.contact) + '</div>' +
-      '<div class="when">' + esc(when) + (l.afterHours ? ' <span class="after-hours">after hours</span>' : '') + '</div>' +
+      '<div class="when">' + esc(when) + (l.afterHours ? ' <span class="after-hours">after hours</span>' : '') +
+      (l.source && l.source !== "website" ? ' <span class="source-tag">' + esc(l.source) + '</span>' : '') + '</div>' +
       ((l.reasons && l.reasons.length) ?
         '<ul class="reasons">' + l.reasons.map(function (r) { return "<li>" + esc(r) + "</li>"; }).join("") + '</ul>' : '') +
       '<div class="lead-actions">' +
       '<button class="act' + (contacted ? ' done' : '') + '" data-act="status" data-id="' + esc(l.id) + '">' +
       (contacted ? '✓ Contacted — mark as new' : 'Mark as contacted') + '</button>' +
       '<button class="act del" data-act="delete" data-id="' + esc(l.id) + '">Delete lead</button>' +
+      '<button class="act" data-act="notes" data-id="' + esc(l.id) + '">Notes (' + noteCount + ')</button>' +
       '</div>' +
+      '<div class="notes" id="notes-' + esc(l.id) + '">' + notesHtml + '</div>' +
       '</div></div>';
   }).join("");
 }
@@ -381,6 +422,10 @@ document.getElementById("list").addEventListener("click", function (e) {
     }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
       .then(function () { lead.status = next; render(); })
       .catch(function () { alert("Couldn't update that lead — is the server running?"); });
+  } else if (act === "notes") {
+    var box = btn.closest(".lead-body");
+    var panel = box ? box.querySelector(".notes") : null;
+    if (panel) panel.classList.toggle("open");
   } else if (act === "delete") {
     if (!confirm("Delete this lead? This can't be undone.")) return;
     fetch("/api/lead/" + encodeURIComponent(id), { method: "DELETE" })
@@ -391,6 +436,68 @@ document.getElementById("list").addEventListener("click", function (e) {
       })
       .catch(function () { alert("Couldn't delete that lead — is the server running?"); });
   }
+});
+// Add a note (event delegation covers the per-lead note forms re-rendered above).
+document.getElementById("list").addEventListener("click", function (e) {
+  var addBtn = e.target.closest("[data-note-add]");
+  if (!addBtn) return;
+  var id = addBtn.getAttribute("data-note-add");
+  var panel = addBtn.closest(".notes");
+  var input = panel ? panel.querySelector("input") : null;
+  var text = input ? input.value.trim() : "";
+  if (!text) { if (input) input.focus(); return; }
+  fetch("/api/lead/" + encodeURIComponent(id) + "/notes", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: text })
+  }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function () {
+      for (var i = 0; i < leads.length; i++) {
+        if (leads[i].id === id) {
+          leads[i].notes = leads[i].notes || [];
+          leads[i].notes.push({ at: new Date().toISOString(), author: "me", text: text });
+          break;
+        }
+      }
+      render();
+      // keep the notes panel open on the lead we just annotated
+      setTimeout(function () {
+        var btn = document.querySelector('[data-act="notes"][data-id="' + id + '"]');
+        var b2 = btn && btn.closest(".lead-body");
+        var p = b2 && b2.querySelector(".notes");
+        if (p) p.classList.add("open");
+      }, 0);
+    })
+    .catch(function () { alert("Couldn't save that note — is the server running?"); });
+});
+// Import CSV: name,service,timeline,budget,location,contact[,source] header row.
+document.getElementById("import-btn").addEventListener("click", function () {
+  document.getElementById("import-file").click();
+});
+document.getElementById("import-file").addEventListener("change", function (e) {
+  var file = e.target.files && e.target.files[0];
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function () {
+    fetch("/api/import.csv", {
+      method: "POST",
+      headers: { "Content-Type": "text/csv" },
+      body: reader.result
+    }).then(function (r) {
+      if (!r.ok) throw new Error("import rejected (" + r.status + ")");
+      return r.json();
+    }).then(function (sum) {
+      alert("Imported " + sum.created + " lead" + (sum.created === 1 ? "" : "s") +
+        (sum.duplicates ? " (" + sum.duplicates + " flagged as duplicates)" : "") +
+        (sum.skipped ? " — " + sum.skipped + " blank rows skipped" : "") + ".");
+      e.target.value = "";
+      loadLeads(render);
+    }).catch(function (err) {
+      alert("Import failed: " + err.message + " — the CSV needs at least a name or contact header.");
+      e.target.value = "";
+    });
+  };
+  reader.readAsText(file);
 });
 // Export follows the current view: tier filter + search + date range.
 document.getElementById("export").onclick = function (e) {
